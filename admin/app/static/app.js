@@ -106,6 +106,7 @@ async function save(id, data) {
   const res = id ? await api('PUT', '/api/routes/' + id, body) : await api('POST', '/api/routes', body);
   reportApply(res);
   await load();
+  loadStats();
 }
 
 async function remove(r) {
@@ -117,7 +118,7 @@ async function remove(r) {
 /* ---------- route dialog ---------- */
 const dlg = $('#route-dlg');
 
-function openDialog(r) {
+function openDialog(r, prefillDomain) {
   editingId = r ? r.id : null;
   form.reset();
   $('#dlg-err').textContent = '';
@@ -131,8 +132,9 @@ function openDialog(r) {
     form.upstream_tls.checked = !!r.upstream_tls;
   }
   $('#more').open = !!r && (r.tls_mode !== 'auto' || r.upstream_tls || r.note);
+  if (prefillDomain) form.domain.value = prefillDomain;
   dlg.showModal();
-  form.domain.focus();
+  (prefillDomain ? form.upstream : form.domain).focus();
 }
 
 form.addEventListener('submit', async (e) => {
@@ -150,85 +152,182 @@ $('#add').onclick = () => openDialog(null);
 $('#cancel').onclick = () => dlg.close();
 $('#search').addEventListener('input', renderRows);
 
-/* ---------- stats ---------- */
+/* ---------- stats dashboard ---------- */
 let statsRange = '24h';
+const NS = 'http://www.w3.org/2000/svg';
+const COLORS = {ok: 'var(--accent)', r3: '#8aa7f8', c4: '#e0a100', c5: 'var(--bad)'};
 
-function ago(ts, now) {
-  if (!ts) return 'never';
-  const s = Math.max(0, Math.round(now - ts));
-  if (s < 60) return s + ' s ago';
-  if (s < 3600) return Math.floor(s / 60) + ' min ago';
-  if (s < 86400) return Math.floor(s / 3600) + ' h ago';
-  return Math.floor(s / 86400) + ' d ago';
+function svgEl(tag, attrs, text) {
+  const e = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs || {})) e.setAttribute(k, v);
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+const fmtNum = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e4 ? (n / 1e3).toFixed(1) + 'k' : n.toLocaleString();
+const fmtPct = (x) => (x * 100 < 10 && x > 0 ? (x * 100).toFixed(1) : Math.round(x * 100)) + '%';
+
+function fmtBytes(b) {
+  const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) { b /= 1024; i++; }
+  return (i ? b.toFixed(b < 10 ? 1 : 0) : b) + ' ' + u[i];
+}
+
+function fmtTime(ts, range) {
+  const d = new Date(ts * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return range === '7d' || range === '30d' ? p(d.getDate()) + '.' + p(d.getMonth() + 1) : p(d.getHours()) + ':' + p(d.getMinutes());
+}
+
+function kpi(label, value, sub, cls) {
+  const d = el('div', undefined, 'kpi');
+  d.append(el('div', label, 'kpi-label'), el('div', value, 'kpi-value' + (cls ? ' ' + cls : '')), el('div', sub, 'kpi-sub'));
+  return d;
 }
 
 function spark(series) {
-  const NS = 'http://www.w3.org/2000/svg';
-  const svg = document.createElementNS(NS, 'svg');
   const w = 4, gap = 1, h = 24, max = Math.max(1, ...series);
-  svg.setAttribute('width', series.length * (w + gap));
-  svg.setAttribute('height', h);
+  const svg = svgEl('svg', {width: series.length * (w + gap), height: h});
   series.forEach((v, i) => {
-    const bar = document.createElementNS(NS, 'rect');
     const bh = v ? Math.max(2, Math.round((v / max) * h)) : 1;
-    bar.setAttribute('x', i * (w + gap));
-    bar.setAttribute('y', h - bh);
-    bar.setAttribute('width', w);
-    bar.setAttribute('height', bh);
-    bar.setAttribute('rx', 1);
-    bar.setAttribute('fill', v ? 'var(--accent)' : 'var(--line)');
-    svg.append(bar);
+    svg.append(svgEl('rect', {x: i * (w + gap), y: h - bh, width: w, height: bh, rx: 1, fill: v ? COLORS.ok : 'var(--line)'}));
   });
   return svg;
+}
+
+function drawTimeline(d) {
+  const W = 640, H = 190, L = 40, B = 22, T = 8;
+  const svg = svgEl('svg', {viewBox: `0 0 ${W} ${H}`, class: 'chart', preserveAspectRatio: 'none'});
+  const tl = d.timeline;
+  const max = Math.max(1, ...tl.map((b) => b.ok + b.c4 + b.c5));
+  const nice = (m) => { const p = 10 ** Math.floor(Math.log10(m)); return Math.ceil(m / p) * p; };
+  const top = nice(max);
+  const ph = H - B - T, pw = W - L;
+  [0, 0.5, 1].forEach((f) => {
+    const y = T + ph - f * ph;
+    svg.append(svgEl('line', {x1: L, x2: W, y1: y, y2: y, stroke: 'var(--line)'}));
+    svg.append(svgEl('text', {x: L - 6, y: y + 4, 'text-anchor': 'end', class: 'ax'}, fmtNum(Math.round(top * f))));
+  });
+  const bw = pw / tl.length;
+  tl.forEach((b, i) => {
+    const g = svgEl('g');
+    let y = T + ph;
+    for (const [k, c] of [['ok', COLORS.ok], ['c4', COLORS.c4], ['c5', COLORS.c5]]) {
+      const hh = (b[k] / top) * ph;
+      if (hh <= 0) continue;
+      y -= hh;
+      g.append(svgEl('rect', {x: L + i * bw + 1, y, width: Math.max(1, bw - 2), height: hh, fill: c, rx: 1}));
+    }
+    const hit = svgEl('rect', {x: L + i * bw, y: T, width: bw, height: ph, fill: 'transparent'});
+    hit.append(svgEl('title', {}, fmtTime(b.t, d.range) + ': ' + (b.ok + b.c4 + b.c5) + ' requests (4xx: ' + b.c4 + ', 5xx: ' + b.c5 + ')'));
+    g.append(hit);
+    svg.append(g);
+  });
+  [0, Math.floor((tl.length - 1) / 2), tl.length - 1].forEach((i, n) => {
+    svg.append(svgEl('text', {x: L + i * bw + bw / 2, y: H - 5, 'text-anchor': n === 0 ? 'start' : n === 2 ? 'end' : 'middle', class: 'ax'}, fmtTime(tl[i].t, d.range)));
+  });
+  $('#timeline').replaceChildren(svg);
+}
+
+function drawTop(d) {
+  const box = $('#top');
+  box.replaceChildren();
+  const list = d.hosts.filter((h) => h.requests > 0).slice(0, 8);
+  if (!list.length) { box.append(el('p', 'No traffic in this period yet.', 'muted')); return; }
+  const max = list[0].requests;
+  for (const h of list) {
+    const row = el('div', undefined, 'hbar');
+    const bar = el('div', undefined, 'hbar-fill');
+    bar.style.width = Math.max(2, (h.requests / max) * 100) + '%';
+    const label = el('div', undefined, 'hbar-label');
+    label.append(el('span', h.host), el('b', fmtNum(h.requests) + ' · ' + fmtPct(h.share)));
+    const track = el('div', undefined, 'hbar-track');
+    track.append(bar);
+    row.append(label, track);
+    box.append(row);
+  }
+}
+
+function drawResponses(d) {
+  const t = d.totals, box = $('#resp');
+  box.replaceChildren();
+  if (!t.requests) { box.append(el('p', 'No traffic in this period yet.', 'muted')); return; }
+  const parts = [['2xx success', t.s2, COLORS.ok], ['3xx redirects', t.s3, COLORS.r3],
+    ['4xx client errors', t.s4, COLORS.c4], ['5xx server errors', t.s5, COLORS.c5]];
+  const stack = el('div', undefined, 'stack');
+  for (const [, n, c] of parts) {
+    if (!n) continue;
+    const s = el('span');
+    s.style.width = (n / t.requests) * 100 + '%';
+    s.style.background = c;
+    stack.append(s);
+  }
+  box.append(stack);
+  for (const [name, n, c] of parts) {
+    const r = el('div', undefined, 'legend-row');
+    const sw = el('i');
+    sw.style.background = c;
+    r.append(sw, el('span', name), el('b', n.toLocaleString() + ' · ' + fmtPct(n / t.requests)));
+    box.append(r);
+  }
 }
 
 async function loadStats() {
   if ($('#tab-stats').hidden) return;
   try {
     const d = await api('GET', '/api/stats?range=' + statsRange);
+    const t = d.totals;
+    $('#kpis').replaceChildren(
+      kpi('Requests', fmtNum(t.requests), t.last5 + ' in the last 5 min'),
+      kpi('Traffic', fmtBytes(t.bytes), 'sent to clients'),
+      kpi('Error rate', t.requests ? fmtPct(t.error_rate) : '–', (t.s4 + t.s5) + ' failed requests',
+        t.error_rate > 0.05 ? 'bad' : ''),
+      kpi('Active now', t.active_domains + ' / ' + t.domains, 'domains with requests in 5 min'),
+    );
+    drawTimeline(d);
+    drawTop(d);
+    drawResponses(d);
+
     const tbody = $('#stats-rows');
     tbody.replaceChildren();
     $('#stats-empty').hidden = d.hosts.length > 0;
     for (const h of d.hosts) {
       const tr = el('tr');
-      tr.style.cursor = 'pointer';
-      tr.onclick = () => showRecent(h.host);
       const dotTd = el('td');
-      const dot = el('span', undefined, 'dot' + (h.active_5m ? ' up' : ''));
-      dot.title = h.active_5m ? h.active_5m + ' requests in the last 5 minutes' : 'No requests in the last 5 minutes';
+      const dot = el('span', undefined, 'dot' + (h.active ? ' up' : ''));
+      dot.title = h.active ? 'Receiving requests' : 'No requests in the last 5 minutes';
       dotTd.append(dot);
       const domainTd = el('td', h.host);
-      if (!h.routed) domainTd.append(el('div', 'no route configured', 'muted'));
-      else if (!h.enabled) domainTd.append(el('div', 'disabled', 'muted'));
-      const errs = h.client_errors + h.server_errors;
-      const errTd = el('td', errs ? String(errs) : '–');
-      if (h.server_errors) errTd.style.color = 'var(--bad)';
-      errTd.title = '4xx: ' + h.client_errors + ', 5xx: ' + h.server_errors;
+      if (!h.enabled) domainTd.append(el('div', 'disabled', 'muted'));
+      const errTd = el('td', h.errors ? h.errors.toLocaleString() : '–');
+      if (h.errors) errTd.style.color = 'var(--bad)';
       const trend = el('td');
       trend.append(spark(h.series));
-      tr.append(dotTd, domainTd, el('td', h.requests.toLocaleString()), errTd,
-        el('td', ago(h.last_seen, d.now)), trend);
+      tr.append(dotTd, domainTd, el('td', h.requests.toLocaleString()),
+        el('td', h.requests ? fmtPct(h.share) : '–'), errTd, el('td', fmtBytes(h.bytes)), trend);
       tbody.append(tr);
     }
-  } catch (e) { banner(e.message); }
-}
 
-async function showRecent(host) {
-  $('#recent-title').textContent = host;
-  const list = await api('GET', '/api/stats/recent?host=' + encodeURIComponent(host));
-  const tbody = $('#recent-rows');
-  tbody.replaceChildren();
-  $('#recent-empty').hidden = list.length > 0;
-  for (const r of list) {
-    const st = el('td', String(r.status));
-    if (r.status >= 500) st.style.color = 'var(--bad)';
-    else if (r.status >= 400) st.style.color = '#c98a00';
-    const tr = el('tr');
-    tr.append(el('td', new Date(r.ts * 1000).toLocaleTimeString()), el('td', r.ip),
-      el('td', r.method + ' ' + r.uri), st);
-    tbody.append(tr);
-  }
-  $('#recent-dlg').showModal();
+    const ub = $('#unknown-rows');
+    ub.replaceChildren();
+    $('#unknown-empty').hidden = d.unknown.length > 0;
+    for (const u of d.unknown) {
+      const act = el('td', undefined, 'actions');
+      act.append(
+        btn('Create route', 'icon', () => openDialog(null, u.host)),
+        ' ',
+        btn('Dismiss', 'ghost icon', async () => {
+          await api('POST', '/api/unknown/dismiss', {host: u.host});
+          loadStats();
+        }),
+      );
+      const tr = el('tr');
+      tr.append(el('td', u.host), el('td', u.requests ? u.requests.toLocaleString() : '–'),
+        el('td', u.attempts ? u.attempts.toLocaleString() : '–'), act);
+      ub.append(tr);
+    }
+  } catch (e) { banner(e.message); }
 }
 
 document.querySelectorAll('#range button').forEach((b) => {
@@ -238,7 +337,6 @@ document.querySelectorAll('#range button').forEach((b) => {
     loadStats();
   };
 });
-$('#recent-close').onclick = () => $('#recent-dlg').close();
 
 /* ---------- system ---------- */
 async function loadSystem() {

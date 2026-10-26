@@ -15,6 +15,7 @@ from pydantic import BaseModel, field_validator, model_validator
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import caddy, stats
+from .common import DOMAIN_RE
 from .db import Store
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
@@ -25,7 +26,6 @@ ADMIN_TLS = os.environ.get("ADMIN_TLS", "auto").strip()
 CADDY_URL = os.environ.get("CADDY_ADMIN_URL", "http://caddy:2019")
 STATIC = Path(__file__).parent / "static"
 
-DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$")
 
 
@@ -214,54 +214,36 @@ def status():
     return {r["id"]: _reachable(r["upstream"]) for r in store.list() if r["enabled"]}
 
 
-RANGES = {"24h": (3600, 24), "7d": (86400, 7), "30d": (86400, 30)}
-
-
 @app.get("/api/stats", dependencies=[Depends(require_auth)])
 def get_stats(range: str = "24h"):
-    if range not in RANGES:
-        raise HTTPException(422, "range must be one of 24h, 7d, 30d")
-    bucket, count = RANGES[range]
-    now = time.time()
-    since = now - bucket * count
-    hosts: dict[str, dict] = {}
-
-    def row(host: str) -> dict:
-        return hosts.setdefault(host, {
-            "host": host, "requests": 0, "ok": 0, "redirects": 0, "client_errors": 0,
-            "server_errors": 0, "bytes": 0, "series": [0] * count,
-        })
-
-    for r in store.hourly_since(since):
-        idx = count - 1 - int((now - (r["hour"] + 1800)) // bucket)
-        if idx < 0:
-            continue
-        h = row(r["host"])
-        h["requests"] += r["n"]
-        h["ok"] += r["s2"]
-        h["redirects"] += r["s3"]
-        h["client_errors"] += r["s4"]
-        h["server_errors"] += r["s5"]
-        h["bytes"] += r["bytes"]
-        h["series"][min(idx, count - 1)] += r["n"]
-
-    routed = {r["domain"]: r for r in store.list()}
-    for domain in routed:
-        row(domain)
-    seen = store.seen_all()
-    active = store.recent_count(now - 300)
-    for host, h in hosts.items():
-        h["routed"] = host in routed
-        h["enabled"] = bool(routed[host]["enabled"]) if host in routed else False
-        h["last_seen"] = seen.get(host, {}).get("ts")
-        h["active_5m"] = active.get(host, 0)
-    out = sorted(hosts.values(), key=lambda h: (-(h["last_seen"] or 0), h["host"]))
-    return {"now": now, "range": range, "hosts": out}
+    if range not in stats.RANGES:
+        raise HTTPException(422, "range must be one of " + ", ".join(stats.RANGES))
+    return stats.build_dashboard(store, range)
 
 
-@app.get("/api/stats/recent", dependencies=[Depends(require_auth)])
-def recent_requests(host: str):
-    return store.recent(host.strip().lower(), 50)
+class HostIn(BaseModel):
+    host: str
+
+
+@app.post("/api/unknown/dismiss", dependencies=[Depends(require_auth)])
+def dismiss_unknown(body: HostIn):
+    store.ignore(body.host.strip().lower())
+    return {"ok": True}
+
+
+@app.get("/internal/ask")
+def tls_ask(request: Request, domain: str = ""):
+    """Called by Caddy before it would issue an on-demand certificate.
+
+    Always answers 403 (no certificates are ever issued this way); the call only
+    tells us that a client asked for a name that has no route.
+    """
+    if "x-forwarded-for" in request.headers:  # came through the proxy, not from Caddy itself
+        raise HTTPException(404, "Not found")
+    domain = domain.strip().lower()
+    if DOMAIN_RE.match(domain) and domain not in {r["domain"] for r in store.list()}:
+        store.note_unknown(domain)
+    return JSONResponse({"allowed": False}, status_code=403)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])

@@ -18,7 +18,9 @@ def test_build_config_routes_by_host():
     r = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]
     assert r["match"] == [{"host": ["a.example.com"]}]
     assert r["handle"][0]["upstreams"] == [{"dial": "10.0.0.5:8080"}]
-    assert "tls" not in cfg["apps"]
+    policies = cfg["apps"]["tls"]["automation"]["policies"]
+    assert policies[0]["subjects"] == ["a.example.com"]  # public name keeps its own ACME policy
+    assert policies[-1]["on_demand"] is True and "subjects" not in policies[-1]
 
 
 def test_disabled_routes_are_skipped():

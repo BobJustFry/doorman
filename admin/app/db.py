@@ -7,6 +7,10 @@ from pathlib import Path
 
 _lock = threading.Lock()
 
+_COUNTERS = """n INTEGER NOT NULL DEFAULT 0, s2 INTEGER NOT NULL DEFAULT 0,
+    s3 INTEGER NOT NULL DEFAULT 0, s4 INTEGER NOT NULL DEFAULT 0, s5 INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0"""
+
 
 class Store:
     def __init__(self, path: Path):
@@ -15,7 +19,7 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         with _lock:
             self.conn.executescript(
-                """CREATE TABLE IF NOT EXISTS routes (
+                f"""CREATE TABLE IF NOT EXISTS routes (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     domain TEXT NOT NULL UNIQUE,
                     upstream TEXT NOT NULL,
@@ -25,20 +29,16 @@ class Store:
                     note TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE IF NOT EXISTS hits_hourly (
-                    host TEXT NOT NULL, hour INTEGER NOT NULL, n INTEGER NOT NULL DEFAULT 0,
-                    s2 INTEGER NOT NULL DEFAULT 0, s3 INTEGER NOT NULL DEFAULT 0,
-                    s4 INTEGER NOT NULL DEFAULT 0, s5 INTEGER NOT NULL DEFAULT 0,
-                    bytes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (host, hour)
-                );
+                    host TEXT NOT NULL, hour INTEGER NOT NULL, {_COUNTERS}, PRIMARY KEY (host, hour));
+                CREATE TABLE IF NOT EXISTS hits_minute (
+                    host TEXT NOT NULL, minute INTEGER NOT NULL, {_COUNTERS}, PRIMARY KEY (host, minute));
                 CREATE TABLE IF NOT EXISTS seen (
-                    host TEXT PRIMARY KEY, ts REAL NOT NULL, total INTEGER NOT NULL DEFAULT 0
-                );
-                CREATE TABLE IF NOT EXISTS recent (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL NOT NULL, host TEXT NOT NULL,
-                    ip TEXT, method TEXT, uri TEXT, status INTEGER, ms INTEGER
-                );
-                CREATE INDEX IF NOT EXISTS recent_host ON recent (host, id);
-                CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);"""
+                    host TEXT PRIMARY KEY, ts REAL NOT NULL, total INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
+                CREATE TABLE IF NOT EXISTS unknown (
+                    host TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0, ts REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS ignored (host TEXT PRIMARY KEY);
+                DROP TABLE IF EXISTS recent;"""
             )
             self.conn.commit()
 
@@ -83,37 +83,38 @@ class Store:
             self.conn.commit()
         return cur.rowcount > 0
 
-    # ---- access statistics -------------------------------------------------
+    # ---- access counters (no per-request data is kept) -----------------------
 
     def add_hits(self, hits: list[dict]) -> None:
         if not hits:
             return
         with _lock:
             for h in hits:
-                hour = int(h["ts"] // 3600 * 3600)
                 col = f"s{min(max(h['status'] // 100, 2), 5)}"
-                self.conn.execute(
-                    f"INSERT INTO hits_hourly (host, hour, n, {col}, bytes) VALUES (?,?,1,1,?)"
-                    f" ON CONFLICT(host, hour) DO UPDATE SET n=n+1, {col}={col}+1, bytes=bytes+?",
-                    (h["host"], hour, h["size"], h["size"]),
-                )
+                for table, key, step in (("hits_hourly", "hour", 3600), ("hits_minute", "minute", 60)):
+                    self.conn.execute(
+                        f"INSERT INTO {table} (host, {key}, n, {col}, bytes) VALUES (?,?,1,1,?)"
+                        f" ON CONFLICT(host, {key}) DO UPDATE SET n=n+1, {col}={col}+1, bytes=bytes+?",
+                        (h["host"], int(h["ts"] // step * step), h["size"], h["size"]),
+                    )
                 self.conn.execute(
                     "INSERT INTO seen (host, ts, total) VALUES (?,?,1)"
                     " ON CONFLICT(host) DO UPDATE SET ts=MAX(ts, excluded.ts), total=total+1",
                     (h["host"], h["ts"]),
                 )
-                self.conn.execute(
-                    "INSERT INTO recent (ts, host, ip, method, uri, status, ms) VALUES (?,?,?,?,?,?,?)",
-                    (h["ts"], h["host"], h["ip"], h["method"], h["uri"], h["status"], h["ms"]),
-                )
-            self.conn.execute("DELETE FROM recent WHERE id < (SELECT MAX(id) FROM recent) - 2000")
-            self.conn.execute("DELETE FROM hits_hourly WHERE hour < ?", (time.time() - 31 * 86400,))
+            now = time.time()
+            self.conn.execute("DELETE FROM hits_hourly WHERE hour < ?", (now - 31 * 86400,))
+            self.conn.execute("DELETE FROM hits_minute WHERE minute < ?", (now - 3 * 3600,))
+            self.conn.execute("DELETE FROM seen WHERE ts < ?", (now - 90 * 86400,))
             self.conn.commit()
 
-    def hourly_since(self, since: float) -> list[dict]:
+    def counters_since(self, table: str, since: float) -> list[dict]:
+        key = {"hits_hourly": "hour", "hits_minute": "minute"}[table]
+        step = 3600 if key == "hour" else 60
         with _lock:
             rows = self.conn.execute(
-                "SELECT * FROM hits_hourly WHERE hour >= ?", (int(since // 3600 * 3600),)
+                f"SELECT host, {key} AS t, n, s2, s3, s4, s5, bytes FROM {table} WHERE {key} >= ?",
+                (int(since // step * step),),
             ).fetchall()
         return [dict(r) for r in rows]
 
@@ -122,21 +123,38 @@ class Store:
             rows = self.conn.execute("SELECT * FROM seen").fetchall()
         return {r["host"]: dict(r) for r in rows}
 
-    def recent_count(self, since: float) -> dict[str, int]:
-        with _lock:
-            rows = self.conn.execute(
-                "SELECT host, COUNT(*) AS c FROM recent WHERE ts >= ? GROUP BY host", (since,)
-            ).fetchall()
-        return {r["host"]: r["c"] for r in rows}
+    # ---- domains that reached Doorman without a route -----------------------
 
-    def recent(self, host: str, limit: int = 50) -> list[dict]:
+    def note_unknown(self, host: str) -> None:
+        """Counts a TLS handshake for a name that has no route (reported by Caddy)."""
+        now = time.time()
         with _lock:
-            rows = self.conn.execute(
-                "SELECT ts, ip, method, uri, status, ms FROM recent WHERE host=?"
-                " ORDER BY id DESC LIMIT ?",
-                (host, limit),
-            ).fetchall()
-        return [dict(r) for r in rows]
+            self.conn.execute("DELETE FROM unknown WHERE ts < ?", (now - 30 * 86400,))
+            count = self.conn.execute("SELECT COUNT(*) FROM unknown").fetchone()[0]
+            exists = self.conn.execute("SELECT 1 FROM unknown WHERE host=?", (host,)).fetchone()
+            if count >= 1000 and not exists:
+                return  # cap the table so scanners cannot grow it without bound
+            self.conn.execute(
+                "INSERT INTO unknown (host, n, ts) VALUES (?,1,?)"
+                " ON CONFLICT(host) DO UPDATE SET n=n+1, ts=excluded.ts",
+                (host, now),
+            )
+            self.conn.commit()
+
+    def unknown_attempts(self) -> dict[str, int]:
+        with _lock:
+            rows = self.conn.execute("SELECT host, n FROM unknown").fetchall()
+        return {r["host"]: r["n"] for r in rows}
+
+    def ignore(self, host: str) -> None:
+        with _lock:
+            self.conn.execute("INSERT OR IGNORE INTO ignored (host) VALUES (?)", (host,))
+            self.conn.commit()
+
+    def ignored_all(self) -> set[str]:
+        with _lock:
+            rows = self.conn.execute("SELECT host FROM ignored").fetchall()
+        return {r["host"] for r in rows}
 
     def get_meta(self, key: str) -> str | None:
         with _lock:

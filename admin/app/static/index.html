@@ -37,18 +37,50 @@
   <section id="tab-stats" hidden>
     <div class="bar">
       <div class="seg" id="range">
+        <button data-range="1h">1 hour</button>
         <button data-range="24h" class="active">24 hours</button>
         <button data-range="7d">7 days</button>
         <button data-range="30d">30 days</button>
       </div>
-      <span class="muted grow" id="stats-hint">Click a row to see the latest requests.</span>
     </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="card panel">
+      <div class="panel-head">
+        <h3>Requests over time</h3>
+        <div class="legend-inline">
+          <span><i style="background:var(--accent)"></i>OK</span>
+          <span><i style="background:#e0a100"></i>4xx</span>
+          <span><i style="background:var(--bad)"></i>5xx</span>
+        </div>
+      </div>
+      <div id="timeline"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card panel"><h3>Top domains</h3><div id="top"></div></div>
+      <div class="card panel"><h3>Responses</h3><div id="resp"></div></div>
+    </div>
+
     <div class="card table-wrap">
       <table>
-        <thead><tr><th></th><th>Domain</th><th>Requests</th><th>Errors</th><th>Last request</th><th>Trend</th></tr></thead>
+        <thead><tr><th></th><th>Domain</th><th>Requests</th><th>Share</th><th>Errors</th><th>Traffic</th><th>Trend</th></tr></thead>
         <tbody id="stats-rows"></tbody>
       </table>
       <p id="stats-empty" class="muted pad" hidden>No data yet.</p>
+    </div>
+
+    <div class="card panel">
+      <h3>Unrouted domains</h3>
+      <p class="muted hint">Names that reached Doorman but have no route yet. Create a route to start serving them.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Domain</th><th>HTTP requests</th><th>HTTPS attempts</th><th></th></tr></thead>
+          <tbody id="unknown-rows"></tbody>
+        </table>
+      </div>
+      <p id="unknown-empty" class="muted pad" hidden>Nothing here: every requested domain has a route.</p>
     </div>
   </section>
 
@@ -88,18 +120,6 @@
       <button type="submit" id="submit">Save</button>
     </div>
   </form>
-</dialog>
-
-<dialog id="recent-dlg">
-  <h2 id="recent-title">Latest requests</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Time</th><th>From</th><th>Request</th><th>Status</th></tr></thead>
-      <tbody id="recent-rows"></tbody>
-    </table>
-    <p id="recent-empty" class="muted pad" hidden>No requests recorded.</p>
-  </div>
-  <div class="actions"><button class="ghost" id="recent-close">Close</button></div>
 </dialog>
 
 <dialog id="config-dlg">
