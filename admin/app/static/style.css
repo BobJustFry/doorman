@@ -91,6 +91,13 @@ svg.chart .ax { fill: var(--muted); font-size: 11px; }
 .legend-row { display: flex; align-items: center; font-size: 13px; padding: 4px 0; }
 .legend-row span { flex: 1; }
 
+.badge { font-size: 11px; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--line); }
+.badge.lan { color: var(--ok); }
+.badge.wan { color: #e0a100; }
+.chip { display: inline-block; font-size: 12px; padding: 1px 8px; margin: 2px 4px 2px 0; border-radius: 10px;
+  background: var(--bg); border: 1px solid var(--line); }
+.chip.unrouted { border-style: dashed; color: var(--muted); }
+.panel-head select { max-width: 55%; }
 .ports { margin-top: 4px; }
 .ports-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 .ports .hint { margin: 0 0 8px; }

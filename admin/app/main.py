@@ -1,4 +1,5 @@
 import hmac
+import json
 import os
 import re
 import secrets
@@ -48,6 +49,16 @@ def current_config() -> dict:
     return caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL, ADMIN_TLS, ADMIN_PORT)
 
 
+def write_firewall_ports() -> None:
+    """Publishes the extra ports in use; a root helper on the host mirrors them into ufw."""
+    ports = sorted({p["port"] for r in store.list() if r["enabled"] for p in r["ports"]})
+    try:
+        with open(DATA_DIR / "firewall-ports.json", "w", encoding="utf-8") as f:
+            json.dump({"tcp": ports}, f)
+    except OSError:
+        pass
+
+
 def apply_config() -> str | None:
     """Push current routes to Caddy. Returns an error message or None."""
     try:
@@ -65,6 +76,7 @@ async def lifespan(_: FastAPI):
         if apply_config() is None:
             break
         time.sleep(1)
+    write_firewall_ports()
     stop_stats = stats.start(store)
     yield
     stop_stats.set()
@@ -188,6 +200,7 @@ def index(request: Request):
 
 
 def _result(route: dict | None) -> dict:
+    write_firewall_ports()
     err = apply_config()
     return {"route": route, "applied": err is None, "error": err}
 
@@ -247,7 +260,7 @@ def status():
 def get_stats(range: str = "24h"):
     if range not in stats.RANGES:
         raise HTTPException(422, "range must be one of " + ", ".join(stats.RANGES))
-    return stats.build_dashboard(store, range)
+    return stats.build_dashboard(store, range, system_hosts=frozenset({ADMIN_DOMAIN} - {""}))
 
 
 class HostIn(BaseModel):

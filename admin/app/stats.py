@@ -1,4 +1,5 @@
 """Reads Caddy's JSON access log and feeds per-domain statistics into the store."""
+import ipaddress
 import json
 import logging
 import os
@@ -18,8 +19,9 @@ def parse_line(line: bytes) -> dict | None:
         e = json.loads(line)
         req = e["request"]
         return {
-            # only counters are derived: no IPs, paths or queries are ever stored
+            # only counters are derived: paths and queries are never stored
             "ts": float(e["ts"]),
+            "ip": req.get("client_ip") or req.get("remote_ip", ""),
             "host": req["host"].split(":")[0].lower(),
             "status": int(e.get("status", 0)),
             "size": int(e.get("size", 0)),
@@ -76,7 +78,8 @@ RANGES = {  # name: (table, bucket seconds, bucket count)
 }
 
 
-def build_dashboard(store: Store, range_name: str, now: float | None = None) -> dict:
+def build_dashboard(store: Store, range_name: str, now: float | None = None,
+                    system_hosts: frozenset = frozenset()) -> dict:
     table, bucket, count = RANGES[range_name]
     now = now or time.time()
     hosts: dict[str, dict] = {}
@@ -125,7 +128,23 @@ def build_dashboard(store: Store, range_name: str, now: float | None = None) -> 
     total["domains"] = len(routed)
     total["last5"] = last5
     return {"now": now, "range": range_name, "bucket": bucket, "totals": total,
-            "timeline": timeline, "hosts": ordered, "unknown": unknown_domains(store, set(routed))}
+            "timeline": timeline, "hosts": ordered,
+            "unknown": unknown_domains(store, set(routed) | set(system_hosts)),
+            "clients": clients(store, table, now - bucket * count, set(routed))}
+
+
+def clients(store: Store, table: str, since: float, routed: set[str]) -> list[dict]:
+    """Who talked to Doorman: request counters per (client IP, domain), routed or not."""
+    rows = store.clients_since("clients_minute" if table == "hits_minute" else "clients_hourly", since)
+    out = []
+    for r in rows:
+        try:
+            lan = ipaddress.ip_address(r["ip"]).is_private
+        except ValueError:
+            continue
+        out.append({"ip": r["ip"], "host": r["host"], "requests": r["requests"],
+                    "errors": r["errors"], "lan": lan, "routed": r["host"] in routed})
+    return out
 
 
 def unknown_domains(store: Store, routed: set[str]) -> list[dict]:

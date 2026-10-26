@@ -1,6 +1,7 @@
 const $ = (s) => document.querySelector(s);
 const form = $('#form');
 let routes = [];
+let routesLoaded = false;
 let editingId = null;
 
 async function api(method, url, body) {
@@ -37,61 +38,84 @@ function btn(label, cls, fn) {
   return b;
 }
 
-/* ---------- tabs ---------- */
+/* Re-render a block only when its data really changed, so periodic refreshes
+   never rebuild (or flicker) parts of the page that look the same. */
+const rendered = {};
+function renderIf(key, data, fn) {
+  const sig = JSON.stringify(data);
+  if (rendered[key] === sig) return;
+  rendered[key] = sig;
+  fn();
+}
+
+const activeTab = () => document.querySelector('#tabs button.active').dataset.tab;
+const visible = (tab) => !document.hidden && activeTab() === tab;
+
+/* ---------- tabs (data of each tab is loaded lazily, when it is first opened) ---------- */
 document.querySelectorAll('#tabs button').forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
     for (const s of ['routes', 'stats', 'system']) $('#tab-' + s).hidden = s !== b.dataset.tab;
     if (b.dataset.tab === 'system') loadSystem();
     if (b.dataset.tab === 'stats') loadStats();
+    if (b.dataset.tab === 'routes') loadRoutes();
   };
 });
 
 /* ---------- routes ---------- */
+function routeRow(r) {
+  const tr = el('tr');
+  if (!r.enabled) tr.className = 'off';
+  const dotTd = el('td');
+  const dot = el('span', undefined, 'dot');
+  dot.dataset.id = r.id;
+  dotTd.append(dot);
+  const domainTd = el('td', r.domain);
+  const extra = (r.ports || []).map((p) => ':' + p.port).join('  ');
+  if (extra) domainTd.append(el('div', 'ports ' + extra, 'muted'));
+  if (r.note) domainTd.append(el('div', r.note, 'muted'));
+  const act = el('td', undefined, 'actions');
+  act.append(
+    btn(r.enabled ? 'Off' : 'On', 'ghost icon', () => save(r.id, {...r, enabled: !r.enabled})),
+    ' ',
+    btn('Edit', 'ghost icon', () => openDialog(r)),
+    ' ',
+    btn('✕', 'danger icon', () => remove(r)),
+  );
+  tr.append(dotTd, domainTd, el('td', (r.upstream_tls ? 'https://' : '') + r.upstream), act);
+  return tr;
+}
+
 function renderRows() {
   const q = $('#search').value.trim().toLowerCase();
   const list = routes.filter((r) => !q || (r.domain + ' ' + r.upstream + ' ' + r.note).toLowerCase().includes(q));
-  const tbody = $('#rows');
-  tbody.replaceChildren();
   $('#empty').hidden = list.length > 0;
   $('#empty').textContent = routes.length ? 'Nothing found.' : 'No routes yet.';
-  for (const r of list) {
-    const tr = el('tr');
-    if (!r.enabled) tr.className = 'off';
-    const dotTd = el('td');
-    const dot = el('span', undefined, 'dot');
-    dot.dataset.id = r.id;
-    dotTd.append(dot);
-    const domainTd = el('td', r.domain);
-    const extra = (r.ports || []).map((p) => ':' + p.port).join('  ');
-    if (extra) domainTd.append(el('div', 'ports ' + extra, 'muted'));
-    if (r.note) domainTd.append(el('div', r.note, 'muted'));
-    const act = el('td', undefined, 'actions');
-    act.append(
-      btn(r.enabled ? 'Off' : 'On', 'ghost icon', () => save(r.id, {...r, enabled: !r.enabled})),
-      ' ',
-      btn('Edit', 'ghost icon', () => openDialog(r)),
-      ' ',
-      btn('✕', 'danger icon', () => remove(r)),
-    );
-    tr.append(dotTd, domainTd, el('td', (r.upstream_tls ? 'https://' : '') + r.upstream), act);
-    tbody.append(tr);
-  }
+  $('#rows').replaceChildren(...list.map(routeRow));
   refreshStatus();
 }
 
-async function load() {
-  routes = await api('GET', '/api/routes');
-  renderRows();
+async function loadRoutes() {
+  try {
+    const fresh = await api('GET', '/api/routes');
+    if (routesLoaded && JSON.stringify(fresh) === JSON.stringify(routes)) return;
+    routes = fresh;
+    routesLoaded = true;
+    renderRows();
+  } catch (e) { banner(e.message); }
 }
 
 async function refreshStatus() {
+  if (!visible('routes')) return;
   try {
     const st = await api('GET', '/api/status');
-    document.querySelectorAll('.dot').forEach((d) => {
+    document.querySelectorAll('#rows .dot').forEach((d) => {
       const v = st[d.dataset.id];
-      d.className = 'dot' + (v === true ? ' up' : v === false ? ' down' : '');
-      d.title = v === true ? 'Upstream reachable' : v === false ? 'Upstream unreachable' : 'Disabled';
+      const cls = 'dot' + (v === true ? ' up' : v === false ? ' down' : '');
+      if (d.className !== cls) {
+        d.className = cls;
+        d.title = v === true ? 'Upstream reachable' : v === false ? 'Upstream unreachable' : 'Disabled';
+      }
     });
   } catch (_) { /* ignore */ }
 }
@@ -108,14 +132,18 @@ async function save(id, data) {
   };
   const res = id ? await api('PUT', '/api/routes/' + id, body) : await api('POST', '/api/routes', body);
   reportApply(res);
-  await load();
+  routesLoaded = false;
+  if (activeTab() === 'routes') await loadRoutes();
   loadStats();
 }
 
 async function remove(r) {
   if (!confirm('Delete ' + r.domain + '?')) return;
-  try { reportApply(await api('DELETE', '/api/routes/' + r.id)); await load(); }
-  catch (e) { banner(e.message); }
+  try {
+    reportApply(await api('DELETE', '/api/routes/' + r.id));
+    routesLoaded = false;
+    await loadRoutes();
+  } catch (e) { banner(e.message); }
 }
 
 /* ---------- route dialog ---------- */
@@ -186,8 +214,10 @@ $('#add').onclick = () => openDialog(null);
 $('#cancel').onclick = () => dlg.close();
 $('#search').addEventListener('input', renderRows);
 
-/* ---------- stats dashboard ---------- */
+/* ---------- dashboard ---------- */
 let statsRange = '24h';
+let clientsFilter = '';
+let lastClients = [];
 const NS = 'http://www.w3.org/2000/svg';
 const COLORS = {ok: 'var(--accent)', r3: '#8aa7f8', c4: '#e0a100', c5: 'var(--bad)'};
 
@@ -307,60 +337,103 @@ function drawResponses(d) {
   }
 }
 
+function hostRow(h) {
+  const tr = el('tr');
+  const dotTd = el('td');
+  const dot = el('span', undefined, 'dot' + (h.active ? ' up' : ''));
+  dot.title = h.active ? 'Receiving requests' : 'No requests in the last 5 minutes';
+  dotTd.append(dot);
+  const domainTd = el('td', h.host);
+  if (!h.enabled) domainTd.append(el('div', 'disabled', 'muted'));
+  const errTd = el('td', h.errors ? h.errors.toLocaleString() : '–');
+  if (h.errors) errTd.style.color = 'var(--bad)';
+  const trend = el('td');
+  trend.append(spark(h.series));
+  tr.append(dotTd, domainTd, el('td', h.requests.toLocaleString()),
+    el('td', h.requests ? fmtPct(h.share) : '–'), errTd, el('td', fmtBytes(h.bytes)), trend);
+  return tr;
+}
+
+function unknownRow(u) {
+  const act = el('td', undefined, 'actions');
+  act.append(
+    btn('Create route', 'icon', () => openDialog(null, u.host)),
+    ' ',
+    btn('Dismiss', 'ghost icon', async () => {
+      await api('POST', '/api/unknown/dismiss', {host: u.host});
+      loadStats();
+    }),
+  );
+  const tr = el('tr');
+  tr.append(el('td', u.host), el('td', u.requests ? u.requests.toLocaleString() : '–'),
+    el('td', u.attempts ? u.attempts.toLocaleString() : '–'), act);
+  return tr;
+}
+
+/* Clients: "who knocked", per IP, for routed and unrouted domains alike. */
+function drawClients() {
+  const hosts = [...new Set(lastClients.map((c) => c.host))].sort();
+  const sel = $('#clients-filter');
+  renderIf('clients-hosts', hosts, () => {
+    sel.replaceChildren(new Option('All domains', ''), ...hosts.map((h) => new Option(h, h)));
+  });
+  if (clientsFilter && !hosts.includes(clientsFilter)) clientsFilter = '';
+  sel.value = clientsFilter;
+
+  const byIp = new Map();
+  for (const c of lastClients) {
+    if (clientsFilter && c.host !== clientsFilter) continue;
+    const e = byIp.get(c.ip) || {ip: c.ip, lan: c.lan, requests: 0, errors: 0, domains: []};
+    e.requests += c.requests;
+    e.errors += c.errors;
+    e.domains.push(c);
+    byIp.set(c.ip, e);
+  }
+  const rows = [...byIp.values()].sort((a, b) => b.requests - a.requests).slice(0, 30);
+  $('#clients-empty').hidden = rows.length > 0;
+  $('#clients-rows').replaceChildren(...rows.map((c) => {
+    const tr = el('tr');
+    const net = el('span', c.lan ? 'LAN' : 'Internet', 'badge ' + (c.lan ? 'lan' : 'wan'));
+    const netTd = el('td');
+    netTd.append(net);
+    const domTd = el('td');
+    for (const d of c.domains.sort((a, b) => b.requests - a.requests).slice(0, 4)) {
+      const chip = el('span', d.host + ' · ' + d.requests.toLocaleString(), 'chip' + (d.routed ? '' : ' unrouted'));
+      if (!d.routed) chip.title = 'No route for this domain';
+      domTd.append(chip);
+    }
+    if (c.domains.length > 4) domTd.append(el('span', '+' + (c.domains.length - 4), 'chip'));
+    const errTd = el('td', c.errors ? c.errors.toLocaleString() : '–');
+    if (c.errors) errTd.style.color = 'var(--bad)';
+    tr.append(el('td', c.ip), netTd, domTd, el('td', c.requests.toLocaleString()), errTd);
+    return tr;
+  }));
+}
+
 async function loadStats() {
-  if ($('#tab-stats').hidden) return;
+  if (!visible('stats')) return;
   try {
     const d = await api('GET', '/api/stats?range=' + statsRange);
     const t = d.totals;
-    $('#kpis').replaceChildren(
+    renderIf('kpis', t, () => $('#kpis').replaceChildren(
       kpi('Requests', fmtNum(t.requests), t.last5 + ' in the last 5 min'),
       kpi('Traffic', fmtBytes(t.bytes), 'sent to clients'),
       kpi('Error rate', t.requests ? fmtPct(t.error_rate) : '–', (t.s4 + t.s5) + ' failed requests',
         t.error_rate > 0.05 ? 'bad' : ''),
       kpi('Active now', t.active_domains + ' / ' + t.domains, 'domains with requests in 5 min'),
-    );
-    drawTimeline(d);
-    drawTop(d);
-    drawResponses(d);
-
-    const tbody = $('#stats-rows');
-    tbody.replaceChildren();
-    $('#stats-empty').hidden = d.hosts.length > 0;
-    for (const h of d.hosts) {
-      const tr = el('tr');
-      const dotTd = el('td');
-      const dot = el('span', undefined, 'dot' + (h.active ? ' up' : ''));
-      dot.title = h.active ? 'Receiving requests' : 'No requests in the last 5 minutes';
-      dotTd.append(dot);
-      const domainTd = el('td', h.host);
-      if (!h.enabled) domainTd.append(el('div', 'disabled', 'muted'));
-      const errTd = el('td', h.errors ? h.errors.toLocaleString() : '–');
-      if (h.errors) errTd.style.color = 'var(--bad)';
-      const trend = el('td');
-      trend.append(spark(h.series));
-      tr.append(dotTd, domainTd, el('td', h.requests.toLocaleString()),
-        el('td', h.requests ? fmtPct(h.share) : '–'), errTd, el('td', fmtBytes(h.bytes)), trend);
-      tbody.append(tr);
-    }
-
-    const ub = $('#unknown-rows');
-    ub.replaceChildren();
-    $('#unknown-empty').hidden = d.unknown.length > 0;
-    for (const u of d.unknown) {
-      const act = el('td', undefined, 'actions');
-      act.append(
-        btn('Create route', 'icon', () => openDialog(null, u.host)),
-        ' ',
-        btn('Dismiss', 'ghost icon', async () => {
-          await api('POST', '/api/unknown/dismiss', {host: u.host});
-          loadStats();
-        }),
-      );
-      const tr = el('tr');
-      tr.append(el('td', u.host), el('td', u.requests ? u.requests.toLocaleString() : '–'),
-        el('td', u.attempts ? u.attempts.toLocaleString() : '–'), act);
-      ub.append(tr);
-    }
+    ));
+    renderIf('timeline', [d.range, d.timeline.map((b) => [b.ok, b.c4, b.c5])], () => drawTimeline(d));
+    renderIf('top', d.hosts.map((h) => [h.host, h.requests]), () => drawTop(d));
+    renderIf('resp', t, () => drawResponses(d));
+    renderIf('hosts', d.hosts, () => {
+      $('#stats-empty').hidden = d.hosts.length > 0;
+      $('#stats-rows').replaceChildren(...d.hosts.map(hostRow));
+    });
+    renderIf('unknown', d.unknown, () => {
+      $('#unknown-empty').hidden = d.unknown.length > 0;
+      $('#unknown-rows').replaceChildren(...d.unknown.map(unknownRow));
+    });
+    renderIf('clients', d.clients, () => { lastClients = d.clients; drawClients(); });
   } catch (e) { banner(e.message); }
 }
 
@@ -371,6 +444,8 @@ document.querySelectorAll('#range button').forEach((b) => {
     loadStats();
   };
 });
+
+$('#clients-filter').onchange = (e) => { clientsFilter = e.target.value; drawClients(); };
 
 /* ---------- system ---------- */
 async function loadSystem() {
@@ -393,7 +468,8 @@ $('#show-config').onclick = async () => {
 $('#config-close').onclick = () => $('#config-dlg').close();
 $('#logout').onclick = async () => { await api('POST', '/logout'); location.href = '/login'; };
 
-load();
+/* Only the dashboard is fetched on page load; other tabs load when opened. */
 loadStats();
-setInterval(refreshStatus, 15000);
 setInterval(loadStats, 10000);
+setInterval(refreshStatus, 15000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) loadStats(); });

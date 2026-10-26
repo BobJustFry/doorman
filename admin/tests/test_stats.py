@@ -14,7 +14,7 @@ def line(host="a.example.com", status=200, ts=None, uri="/x?token=secret", ip="1
 def test_parse_keeps_only_counter_fields():
     hit = stats.parse_line(line(host="A.example.com:443"))
     assert hit["host"] == "a.example.com"
-    assert set(hit) == {"ts", "host", "status", "size"}
+    assert set(hit) == {"ts", "host", "ip", "status", "size"}  # no path, query or method
 
 
 def test_parse_garbage_is_ignored():
@@ -45,9 +45,9 @@ def test_step_counts_each_line_once_and_survives_rotation(tmp_path):
 
 def test_no_request_details_are_stored(tmp_path):
     store = Store(tmp_path / "t.db")
-    store.add_hits([stats.parse_line(line(uri="/secret/path?token=abc", ip="203.0.113.7"))])
+    store.add_hits([stats.parse_line(line(uri="/secret/path?token=abc", ip="8.8.8.8"))])
     dump = "\n".join(store.conn.iterdump())
-    assert "secret" not in dump and "203.0.113.7" not in dump
+    assert "secret" not in dump and "token" not in dump
 
 
 def test_dashboard_totals_and_timeline(client_with_store):
@@ -100,3 +100,39 @@ def test_unknown_domains_from_http_and_tls_attempts(client_with_store):
 def test_ask_endpoint_refuses_proxied_requests(client):
     r = client.get("/internal/ask?domain=x.example.com", headers={"X-Forwarded-For": "8.8.8.8"})
     assert r.status_code == 404
+
+
+def test_clients_per_ip_for_routed_and_unrouted(client_with_store):
+    client, store = client_with_store
+    client.post("/api/routes", json={"domain": "a.example.com", "upstream": "1.2.3.4"})
+    store.add_hits([
+        stats.parse_line(line(host="a.example.com", ip="192.168.1.5")),
+        stats.parse_line(line(host="a.example.com", ip="192.168.1.5", status=404)),
+        stats.parse_line(line(host="a.example.com", ip="8.8.8.8")),
+        stats.parse_line(line(host="nope.example.com", ip="8.8.8.8")),
+    ])
+    rows = {(c["ip"], c["host"]): c for c in client.get("/api/stats?range=24h").json()["clients"]}
+    lan = rows[("192.168.1.5", "a.example.com")]
+    assert lan["requests"] == 2 and lan["errors"] == 1 and lan["lan"] is True and lan["routed"] is True
+    assert rows[("8.8.8.8", "a.example.com")]["lan"] is False
+    assert rows[("8.8.8.8", "nope.example.com")]["routed"] is False
+
+
+def test_admin_domain_is_not_listed_as_unrouted(tmp_path):
+    store = Store(tmp_path / "t.db")
+    store.add_hits([stats.parse_line(line(host="panel.example.com")),
+                    stats.parse_line(line(host="other.example.com"))])
+    data = stats.build_dashboard(store, "24h", system_hosts=frozenset({"panel.example.com"}))
+    assert [u["host"] for u in data["unknown"]] == ["other.example.com"]
+
+
+def test_firewall_ports_file_only_lists_enabled_routes(client_with_store):
+    import json
+    client, _ = client_with_store
+    client.post("/api/routes", json={"domain": "a.example.com", "upstream": "1.2.3.4",
+                                     "ports": [{"port": 8444}, {"port": 9000}]})
+    client.post("/api/routes", json={"domain": "off.example.com", "upstream": "1.2.3.5", "enabled": False,
+                                     "ports": [{"port": 7000}]})
+    from app import main
+    data = json.loads((main.DATA_DIR / "firewall-ports.json").read_text())
+    assert data == {"tcp": [8444, 9000]}  # disabled routes do not open ports

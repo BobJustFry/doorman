@@ -39,6 +39,14 @@ class Store:
                     host TEXT NOT NULL, hour INTEGER NOT NULL, {_COUNTERS}, PRIMARY KEY (host, hour));
                 CREATE TABLE IF NOT EXISTS hits_minute (
                     host TEXT NOT NULL, minute INTEGER NOT NULL, {_COUNTERS}, PRIMARY KEY (host, minute));
+                CREATE TABLE IF NOT EXISTS clients_hourly (
+                    host TEXT NOT NULL, ip TEXT NOT NULL, hour INTEGER NOT NULL,
+                    n INTEGER NOT NULL DEFAULT 0, err INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (host, ip, hour));
+                CREATE TABLE IF NOT EXISTS clients_minute (
+                    host TEXT NOT NULL, ip TEXT NOT NULL, minute INTEGER NOT NULL,
+                    n INTEGER NOT NULL DEFAULT 0, err INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (host, ip, minute));
                 CREATE TABLE IF NOT EXISTS seen (
                     host TEXT PRIMARY KEY, ts REAL NOT NULL, total INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
@@ -107,6 +115,14 @@ class Store:
                         f" ON CONFLICT(host, {key}) DO UPDATE SET n=n+1, {col}={col}+1, bytes=bytes+?",
                         (h["host"], int(h["ts"] // step * step), h["size"], h["size"]),
                     )
+                err = 1 if h["status"] >= 400 else 0
+                if h.get("ip"):
+                    for table, key, step in (("clients_hourly", "hour", 3600), ("clients_minute", "minute", 60)):
+                        self.conn.execute(
+                            f"INSERT INTO {table} (host, ip, {key}, n, err) VALUES (?,?,?,1,?)"
+                            f" ON CONFLICT(host, ip, {key}) DO UPDATE SET n=n+1, err=err+?",
+                            (h["host"], h["ip"], int(h["ts"] // step * step), err, err),
+                        )
                 self.conn.execute(
                     "INSERT INTO seen (host, ts, total) VALUES (?,?,1)"
                     " ON CONFLICT(host) DO UPDATE SET ts=MAX(ts, excluded.ts), total=total+1",
@@ -115,6 +131,8 @@ class Store:
             now = time.time()
             self.conn.execute("DELETE FROM hits_hourly WHERE hour < ?", (now - 31 * 86400,))
             self.conn.execute("DELETE FROM hits_minute WHERE minute < ?", (now - 3 * 3600,))
+            self.conn.execute("DELETE FROM clients_hourly WHERE hour < ?", (now - 31 * 86400,))
+            self.conn.execute("DELETE FROM clients_minute WHERE minute < ?", (now - 3 * 3600,))
             self.conn.execute("DELETE FROM seen WHERE ts < ?", (now - 90 * 86400,))
             self.conn.commit()
 
@@ -125,6 +143,17 @@ class Store:
             rows = self.conn.execute(
                 f"SELECT host, {key} AS t, n, s2, s3, s4, s5, bytes FROM {table} WHERE {key} >= ?",
                 (int(since // step * step),),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def clients_since(self, table: str, since: float, limit: int = 300) -> list[dict]:
+        key = {"clients_hourly": "hour", "clients_minute": "minute"}[table]
+        step = 3600 if key == "hour" else 60
+        with _lock:
+            rows = self.conn.execute(
+                f"SELECT ip, host, SUM(n) AS requests, SUM(err) AS errors FROM {table}"
+                f" WHERE {key} >= ? GROUP BY ip, host ORDER BY requests DESC LIMIT ?",
+                (int(since // step * step), limit),
             ).fetchall()
         return [dict(r) for r in rows]
 
