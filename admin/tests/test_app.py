@@ -19,19 +19,20 @@ def test_build_config_routes_by_host():
     assert r["match"] == [{"host": ["a.example.com"]}]
     assert r["handle"][0]["upstreams"] == [{"dial": "10.0.0.5:8080"}]
     policies = cfg["apps"]["tls"]["automation"]["policies"]
-    assert policies[0]["subjects"] == ["a.example.com"]  # public name keeps its own ACME policy
+    assert policies[1]["subjects"] == ["a.example.com"]  # public name keeps its own ACME policy
     assert policies[-1]["on_demand"] is True and "subjects" not in policies[-1]
 
 
 def test_disabled_routes_are_skipped():
     cfg = caddy.build_config([route(enabled=0)])
-    assert cfg["apps"]["http"]["servers"]["doorman"]["routes"] == []
+    routes = cfg["apps"]["http"]["servers"]["doorman"]["routes"]
+    assert len(routes) == 1 and "match" not in routes[0]  # only the stub is left
 
 
 def test_internal_tls_policy_and_https_upstream():
     cfg = caddy.build_config([route(tls_mode="internal", upstream_tls=1)])
     policy = cfg["apps"]["tls"]["automation"]["policies"][0]
-    assert policy["subjects"] == ["a.example.com"]
+    assert "a.example.com" in policy["subjects"]
     assert policy["issuers"] == [{"module": "internal"}]
     handler = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["handle"][0]
     assert handler["transport"]["tls"]["insecure_skip_verify"] is True
@@ -92,7 +93,7 @@ def test_system_and_config_endpoints(client):
 def test_admin_domain_internal_tls():
     cfg = caddy.build_config([], admin_domain="panel.corp.ru", admin_tls="internal")
     policy = cfg["apps"]["tls"]["automation"]["policies"][0]
-    assert policy["subjects"] == ["panel.corp.ru"]
+    assert "panel.corp.ru" in policy["subjects"]
 
 
 def test_default_ports(client):
@@ -135,7 +136,7 @@ def test_two_domains_can_share_an_extra_port():
         route(domain="a.example.com", ports=[{"port": 8444, "tls": False}]),
         route(domain="b.example.com", upstream="10.0.0.6:80", ports=[{"port": 8444, "tls": False}]),
     ])
-    assert len(cfg["apps"]["http"]["servers"]["port_8444"]["routes"]) == 2
+    assert len(cfg["apps"]["http"]["servers"]["port_8444"]["routes"]) == 3  # two domains + stub
 
 
 def test_ports_api_roundtrip_and_validation(client):
@@ -148,3 +149,23 @@ def test_ports_api_roundtrip_and_validation(client):
                 [{"port": 8444}, {"port": 8444}]):
         r = client.post("/api/routes", json={**body, "domain": "x.example.com", "ports": bad})
         assert r.status_code == 422, bad
+
+
+def test_stub_is_the_last_route_and_has_fallback_certificate():
+    cfg = caddy.build_config([route()], admin_domain="panel.example.com")
+    servers = cfg["apps"]["http"]["servers"]
+    last = servers["doorman"]["routes"][-1]
+    assert "match" not in last  # catch-all: any host without a route
+    body = last["handle"][0]
+    assert body["handler"] == "static_response" and body["status_code"] == 404
+    assert "Nobody's home" in body["body"]
+    assert servers["doorman"]["tls_connection_policies"][0]["fallback_sni"] == caddy.FALLBACK_NAME
+    tls = cfg["apps"]["tls"]
+    assert caddy.FALLBACK_NAME in tls["certificates"]["automate"]
+    assert caddy.FALLBACK_NAME in tls["automation"]["policies"][0]["subjects"]
+
+
+def test_extra_port_servers_also_serve_the_stub():
+    cfg = caddy.build_config([route(ports=[{"port": 8444, "tls": False}])])
+    srv = cfg["apps"]["http"]["servers"]["port_8444"]
+    assert "match" not in srv["routes"][-1] and "tls_connection_policies" in srv

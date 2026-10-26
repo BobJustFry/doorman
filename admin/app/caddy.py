@@ -2,9 +2,26 @@
 import json
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 ACCESS_LOG = "/var/log/caddy/access.log"
+STUB_HTML = (Path(__file__).parent / "stub.html").read_text(encoding="utf-8")
+# Served for every name that has no route. HTTPS clients asking for such a name (or for
+# the bare IP) are handed a certificate for this internal name so the page can load.
+FALLBACK_NAME = "doorman.local"
 PRIVATE_RANGES = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "::1/128"]
+
+
+def _stub_route() -> dict:
+    return {"handle": [{
+        "handler": "static_response",
+        "status_code": 404,
+        "headers": {"Content-Type": ["text/html; charset=utf-8"], "Cache-Control": ["no-store"]},
+        "body": STUB_HTML,
+    }]}
+
+
+_FALLBACK_TLS = [{"default_sni": FALLBACK_NAME, "fallback_sni": FALLBACK_NAME}]
 
 
 def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) -> dict:
@@ -47,16 +64,18 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
     servers: dict = {
         "doorman": {
             "listen": [":80", ":443"],
-            "routes": http_routes,
+            "routes": http_routes + [_stub_route()],
             "logs": {"default_logger_name": "doorman"},
+            "tls_connection_policies": _FALLBACK_TLS,
         }
     }
     for port, port_routes in sorted(extra.items()):
         servers[f"port_{port}"] = {
             "listen": [f":{port}"],
-            "routes": port_routes,
+            "routes": port_routes + [_stub_route()],
             "logs": {"default_logger_name": "doorman"},
             "automatic_https": {"disable_redirects": True},
+            "tls_connection_policies": _FALLBACK_TLS,
         }
 
     config: dict = {
@@ -82,15 +101,14 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
     if acme_email:
         acme["email"] = acme_email
 
-    policies = []
-    if internal_hosts:
-        policies.append({"subjects": internal_hosts, "issuers": [{"module": "internal"}]})
+    policies = [{"subjects": internal_hosts + [FALLBACK_NAME], "issuers": [{"module": "internal"}]}]
     if public_hosts:
         policies.append({"subjects": public_hosts, "issuers": [acme]})
     # Names without a route can never get a certificate: Caddy asks the admin app first,
     # which always says no but records the name so it can be turned into a route.
     policies.append({"on_demand": True, "issuers": [{"module": "internal"}]})
     config["apps"]["tls"] = {
+        "certificates": {"automate": [FALLBACK_NAME]},
         "automation": {
             "policies": policies,
             "on_demand": {
