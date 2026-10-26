@@ -1,0 +1,37 @@
+:root {
+  --bg: #f5f6f8; --fg: #1c2230; --card: #fff; --muted: #6b7385; --line: #e2e5ec;
+  --accent: #3b6cf6; --ok: #1e9e5a; --bad: #d93d3d;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #12151c; --fg: #e6e9f0; --card: #1b2030; --muted: #8b93a7; --line: #2a3045; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+body.center { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+.login { width: min(360px, 100%); display: grid; gap: 12px; }
+h1 { margin: 0; font-size: 22px; }
+input, select, button { font: inherit; color: inherit; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg); padding: 8px 10px; }
+button { background: var(--accent); color: #fff; border: 0; cursor: pointer; padding: 8px 14px; }
+button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+button.danger { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+.err { color: var(--bad); margin: 0; min-height: 1.4em; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+  padding: 14px 16px; max-width: 1000px; margin: 0 auto; }
+main { max-width: 1000px; margin: 0 auto; padding: 0 16px 40px; display: grid; gap: 16px; }
+.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;
+  align-items: end; }
+.form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.form .check { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
+.form .check input { width: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+td.actions { white-space: nowrap; text-align: right; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
+.dot.up { background: var(--ok); } .dot.down { background: var(--bad); }
+.muted { color: var(--muted); font-size: 13px; }
+.banner { padding: 10px 14px; border-radius: 8px; background: #d93d3d22; color: var(--bad); }
+.table-wrap { overflow-x: auto; }

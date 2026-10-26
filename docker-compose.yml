@@ -1,0 +1,44 @@
+services:
+  caddy:
+    image: caddy:2
+    container_name: doorman-caddy
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+      - "${HTTPS_PORT:-443}:443/udp"
+    volumes:
+      - ./caddy/caddy.json:/etc/caddy/caddy.json:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    command: ["caddy", "run", "--config", "/etc/caddy/caddy.json", "--resume"]
+    networks: [doorman]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  admin:
+    build: ./admin
+    container_name: doorman-admin
+    restart: unless-stopped
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      CADDY_ADMIN_URL: http://caddy:2019
+      DATA_DIR: /data
+    volumes:
+      - admin_data:/data
+    # Admin UI is reachable only from the host itself (use an SSH tunnel)
+    # unless ADMIN_DOMAIN is set, in which case Caddy serves it over HTTPS.
+    ports:
+      - "127.0.0.1:${ADMIN_PORT:-8080}:8000"
+    depends_on: [caddy]
+    networks: [doorman]
+
+networks:
+  doorman:
+
+volumes:
+  caddy_data:
+  caddy_config:
+  admin_data:

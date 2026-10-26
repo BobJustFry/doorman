@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doorman · Sign in</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="center">
+<form id="f" class="card login">
+  <h1>🚪 Doorman</h1>
+  <input id="pw" type="password" placeholder="Admin password" autofocus required>
+  <button type="submit">Sign in</button>
+  <p id="err" class="err"></p>
+</form>
+<script>
+document.getElementById('f').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const r = await fetch('/login', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({password: document.getElementById('pw').value}),
+  });
+  if (r.ok) location.href = '/';
+  else document.getElementById('err').textContent = (await r.json()).detail || 'Error';
+});
+</script>
+</body>
+</html>

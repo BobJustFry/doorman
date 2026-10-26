@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Doorman</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <h1>🚪 Doorman</h1>
+  <div>
+    <button class="ghost" id="reapply">Re-apply config</button>
+    <button class="ghost" id="logout">Sign out</button>
+  </div>
+</header>
+<main>
+  <div id="banner" class="banner" hidden></div>
+
+  <form id="form" class="card form">
+    <label>Domain <input name="domain" placeholder="app.example.com" required></label>
+    <label>Upstream (IP:port) <input name="upstream" placeholder="192.168.1.10:8080" required></label>
+    <label>Certificate
+      <select name="tls_mode">
+        <option value="auto">Let's Encrypt (public)</option>
+        <option value="internal">Internal CA (self-signed)</option>
+      </select>
+    </label>
+    <label>Note <input name="note" placeholder="optional"></label>
+    <label class="check"><input type="checkbox" name="upstream_tls"> Upstream speaks HTTPS</label>
+    <button type="submit" id="submit">Add route</button>
+  </form>
+
+  <div class="card table-wrap">
+    <table>
+      <thead><tr><th></th><th>Domain</th><th>Upstream</th><th>Cert</th><th>Note</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <p id="empty" class="muted" hidden>No routes yet. Add the first one above.</p>
+  </div>
+</main>
+<script src="/static/app.js"></script>
+</body>
+</html>
