@@ -164,6 +164,11 @@ def require_auth(request: Request) -> None:
         raise HTTPException(401, "Not authenticated")
 
 
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return FileResponse(STATIC / "favicon.svg", media_type="image/svg+xml")
+
+
 @app.get("/login")
 def login_page():
     return FileResponse(STATIC / "login.html")
@@ -290,7 +295,7 @@ def tls_ask(request: Request, domain: str = ""):
     if not DOMAIN_RE.match(domain):
         return JSONResponse({"allowed": False}, status_code=403)
     known = {r["domain"] for r in store.list()} | ({ADMIN_DOMAIN} - {""})
-    if domain in known:
+    if domain in known or domain == caddy.FALLBACK_NAME:  # the stub's own certificate name
         return JSONResponse({"allowed": True})
     zones = {d.split(".", 1)[1] for d in known if d.count(".") >= 2}
     in_zone = any(domain == z or domain.endswith("." + z) for z in zones)

@@ -83,6 +83,7 @@ def test_unknown_domains_from_http_and_tls_attempts(client_with_store):
     # inside the zone of an existing route: allowed (and recorded)
     assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 200
     assert client.get("/internal/ask?domain=known.example.com").status_code == 200
+    assert client.get("/internal/ask?domain=doorman.local").status_code == 200  # stub certificate
     assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 200
     # outside every known zone, or not a valid name: refused
     assert client.get("/internal/ask?domain=stranger.other.org").status_code == 403
