@@ -210,7 +210,7 @@ def test_server_and_powered_by_headers_are_removed():
     handler = proxy_routes(cfg)[0]["handle"][0]
     assert {"Server", "X-Powered-By"} <= set(handler["headers"]["response"]["delete"])
     first = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["handle"][0]
-    assert first["handler"] == "headers" and "Server" in first["response"]["delete"]
+    assert first["handler"] == "headers" and {"Server", "Via"} <= set(first["response"]["delete"])
 
 
 def test_caddy_does_not_try_to_install_its_ca_into_the_container():

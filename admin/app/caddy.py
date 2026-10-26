@@ -15,7 +15,7 @@ PRIVATE_RANGES = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"
 
 
 def _hide_server_route() -> dict:
-    return {"handle": [{"handler": "headers", "response": {"delete": ["Server"], "deferred": True}}]}
+    return {"handle": [{"handler": "headers", "response": {"delete": ["Server", "Via"], "deferred": True}}]}
 
 
 def _https_redirect_route() -> dict:

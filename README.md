@@ -92,6 +92,21 @@ sudo bash deploy/install-fail2ban.sh
 
 Private networks (`10/8`, `172.16/12`, `192.168/16`) and localhost are never banned. List bans with `sudo fail2ban-client status doorman-stub`.
 
+## Security
+
+What the audit looked at and what is in place:
+
+- **Panel**: password with a minimum length (the container refuses to start with a weak one), login throttling that cannot be bypassed by forged headers, signed `HttpOnly` + `SameSite=Strict` session cookie, CSRF check (`Origin` / `Sec-Fetch-Site`), `Host` allow-list against DNS rebinding, strict Content-Security-Policy, `X-Frame-Options: DENY`, `nosniff`, HSTS and `no-store` on every page. The panel listens on `127.0.0.1` only; with `ADMIN_DOMAIN` Caddy serves it, and only to private networks.
+- **Proxy**: plain HTTP is redirected to HTTPS (308) and never serves content; slow-client limits (header timeout, idle timeout, header size); `Server`, `Via` and `X-Powered-By` are removed; the original `Host` and the public name as SNI go to the upstream; extra ports are limited to 1024-65535.
+- **Scanners**: unknown names get the stub page, wrong passwords, scanner-only paths and unknown hosts are written to `security.log` and banned by fail2ban; every address has a "conclusion" dialog that explains why it is listed and lets you block it.
+- **Data**: only counters and short evidence per address are stored (never paths, queries or passwords); the number of distinct hosts, addresses and evidence rows is capped, so hostile Host headers cannot fill the disk.
+- **Containers**: unprivileged, all Linux capabilities dropped (Caddy keeps only `NET_BIND_SERVICE`), `no-new-privileges`, read-only root file system, process and memory limits; Caddy's admin API listens on `127.0.0.1` only. Dependencies are scanned with `pip-audit` (clean at release).
+- **Host** (needs root, run once): `sudo bash deploy/harden-host.sh` disables SSH password logins (only if you already have an SSH key), root login, X11 forwarding, hardens kernel network settings, sets the firewall to deny incoming by default, installs pending updates and removes the login user from the root-equivalent `lxd` group.
+
+Re-run `sudo bash deploy/install-fail2ban.sh` after updates: it also installs the helper behind the dashboard's **Block with fail2ban** and **Unblock** buttons. The panel itself never gets firewall rights; it only writes a request file that the helper validates (public addresses only) before acting.
+
+**Reset statistics**: *Dashboard → Reset…* clears the counters, the lists (unrouted and dismissed names) or both. Routes, certificates and blocked addresses are never touched.
+
 ## Certificates
 
 Each route has a certificate mode:
