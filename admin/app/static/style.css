@@ -6,32 +6,56 @@
   :root { --bg: #12151c; --fg: #e6e9f0; --card: #1b2030; --muted: #8b93a7; --line: #2a3045; }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--bg); color: var(--fg);
   font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 body.center { display: grid; place-items: center; min-height: 100vh; padding: 16px; }
-.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
-.login { width: min(360px, 100%); display: grid; gap: 12px; }
-h1 { margin: 0; font-size: 22px; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+.login { width: min(360px, 100%); display: grid; gap: 12px; padding: 20px; }
+h1 { margin: 0; font-size: 20px; }
+h2 { margin: 0 0 12px; font-size: 18px; }
 input, select, button { font: inherit; color: inherit; border-radius: 8px; border: 1px solid var(--line);
   background: var(--bg); padding: 8px 10px; }
+input[type=checkbox] { width: auto; }
 button { background: var(--accent); color: #fff; border: 0; cursor: pointer; padding: 8px 14px; }
 button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
 button.danger { background: transparent; color: var(--bad); border: 1px solid var(--line); }
+button.icon { padding: 4px 10px; }
 .err { color: var(--bad); margin: 0; min-height: 1.4em; }
-header { display: flex; justify-content: space-between; align-items: center; gap: 12px;
-  padding: 14px 16px; max-width: 1000px; margin: 0 auto; }
-main { max-width: 1000px; margin: 0 auto; padding: 0 16px 40px; display: grid; gap: 16px; }
-.form { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px;
-  align-items: end; }
-.form label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
-.form .check { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
-.form .check input { width: auto; }
+header { display: flex; align-items: center; gap: 16px; padding: 14px 16px;
+  max-width: 900px; margin: 0 auto; }
+header nav { display: flex; gap: 4px; flex: 1; }
+header nav button { background: transparent; color: var(--muted); }
+header nav button.active { background: var(--card); color: var(--fg); border: 1px solid var(--line); }
+main { max-width: 900px; margin: 0 auto; padding: 0 16px 40px; display: grid; gap: 14px; }
+section { display: grid; gap: 12px; }
+.bar { display: flex; gap: 10px; }
+.bar input { flex: 1; }
+.bar.end { justify-content: flex-end; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
 th { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 td.actions { white-space: nowrap; text-align: right; }
+tr.off td:not(.actions) { opacity: .5; }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); }
 .dot.up { background: var(--ok); } .dot.down { background: var(--bad); }
 .muted { color: var(--muted); font-size: 13px; }
+.pad { padding: 14px; margin: 0; }
 .banner { padding: 10px 14px; border-radius: 8px; background: #d93d3d22; color: var(--bad); }
 .table-wrap { overflow-x: auto; }
+.list .item { display: flex; justify-content: space-between; padding: 12px 16px;
+  border-bottom: 1px solid var(--line); gap: 12px; }
+.list .item:last-child { border-bottom: 0; }
+.list span { color: var(--muted); }
+dialog { background: var(--card); color: var(--fg); border: 1px solid var(--line); border-radius: 14px;
+  padding: 20px; width: min(440px, calc(100vw - 32px)); }
+dialog::backdrop { background: #0008; }
+dialog label { display: grid; gap: 4px; margin-bottom: 12px; font-size: 13px; color: var(--muted); }
+dialog label.check { grid-auto-flow: column; justify-content: start; align-items: center; gap: 8px; }
+dialog details { margin-bottom: 12px; }
+dialog summary { cursor: pointer; color: var(--muted); margin-bottom: 10px; }
+dialog .actions { display: flex; justify-content: flex-end; gap: 8px; }
+pre { max-height: 55vh; overflow: auto; font-size: 12px; background: var(--bg); padding: 12px;
+  border-radius: 8px; }
+#config-dlg { width: min(640px, calc(100vw - 32px)); }

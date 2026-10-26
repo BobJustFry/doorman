@@ -4,6 +4,7 @@ import re
 import secrets
 import socket
 import time
+import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -201,6 +202,28 @@ def _reachable(upstream: str) -> bool:
 @app.get("/api/status", dependencies=[Depends(require_auth)])
 def status():
     return {r["id"]: _reachable(r["upstream"]) for r in store.list() if r["enabled"]}
+
+
+@app.get("/api/config", dependencies=[Depends(require_auth)])
+def generated_config():
+    return caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL)
+
+
+@app.get("/api/system", dependencies=[Depends(require_auth)])
+def system():
+    routes = store.list()
+    try:
+        urllib.request.urlopen(CADDY_URL.rstrip("/") + "/config/", timeout=3).read()
+        caddy_ok = True
+    except OSError:
+        caddy_ok = False
+    return {
+        "caddy_ok": caddy_ok,
+        "routes_total": len(routes),
+        "routes_enabled": sum(1 for r in routes if r["enabled"]),
+        "admin_domain": ADMIN_DOMAIN,
+        "acme_email": ACME_EMAIL,
+    }
 
 
 app.mount("/static", StaticFiles(directory=STATIC), name="static")

@@ -24,53 +24,62 @@ function banner(msg) {
   b.textContent = msg || '';
 }
 
-function cell(text, cls) {
-  const td = document.createElement('td');
-  td.textContent = text;
-  if (cls) td.className = cls;
-  return td;
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
 }
 
 function btn(label, cls, fn) {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.className = cls;
+  const b = el('button', label, cls);
   b.onclick = fn;
   return b;
 }
 
-async function render() {
-  routes = await api('GET', '/api/routes');
+/* ---------- tabs ---------- */
+document.querySelectorAll('#tabs button').forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('active', x === b));
+    for (const s of ['routes', 'system']) $('#tab-' + s).hidden = s !== b.dataset.tab;
+    if (b.dataset.tab === 'system') loadSystem();
+  };
+});
+
+/* ---------- routes ---------- */
+function renderRows() {
+  const q = $('#search').value.trim().toLowerCase();
+  const list = routes.filter((r) => !q || (r.domain + ' ' + r.upstream + ' ' + r.note).toLowerCase().includes(q));
   const tbody = $('#rows');
   tbody.replaceChildren();
-  $('#empty').hidden = routes.length > 0;
-  for (const r of routes) {
-    const tr = document.createElement('tr');
-    const dotTd = document.createElement('td');
-    const dot = document.createElement('span');
-    dot.className = 'dot';
+  $('#empty').hidden = list.length > 0;
+  $('#empty').textContent = routes.length ? 'Nothing found.' : 'No routes yet.';
+  for (const r of list) {
+    const tr = el('tr');
+    if (!r.enabled) tr.className = 'off';
+    const dotTd = el('td');
+    const dot = el('span', undefined, 'dot');
     dot.dataset.id = r.id;
     dotTd.append(dot);
-    const act = document.createElement('td');
-    act.className = 'actions';
+    const domainTd = el('td', r.domain);
+    if (r.note) domainTd.append(el('div', r.note, 'muted'));
+    const act = el('td', undefined, 'actions');
     act.append(
-      btn(r.enabled ? 'Disable' : 'Enable', 'ghost', () => save(r.id, {...r, enabled: !r.enabled})),
+      btn(r.enabled ? 'Off' : 'On', 'ghost icon', () => save(r.id, {...r, enabled: !r.enabled})),
       ' ',
-      btn('Edit', 'ghost', () => edit(r)),
+      btn('Edit', 'ghost icon', () => openDialog(r)),
       ' ',
-      btn('Delete', 'danger', () => remove(r)),
+      btn('✕', 'danger icon', () => remove(r)),
     );
-    tr.append(
-      dotTd,
-      cell(r.domain + (r.enabled ? '' : ' (disabled)')),
-      cell((r.upstream_tls ? 'https://' : 'http://') + r.upstream),
-      cell(r.tls_mode === 'internal' ? 'internal' : 'public'),
-      cell(r.note, 'muted'),
-      act,
-    );
+    tr.append(dotTd, domainTd, el('td', (r.upstream_tls ? 'https://' : '') + r.upstream), act);
     tbody.append(tr);
   }
   refreshStatus();
+}
+
+async function load() {
+  routes = await api('GET', '/api/routes');
+  renderRows();
 }
 
 async function refreshStatus() {
@@ -89,56 +98,77 @@ function reportApply(res) {
 }
 
 async function save(id, data) {
-  try {
-    const body = {
-      domain: data.domain, upstream: data.upstream, upstream_tls: !!data.upstream_tls,
-      tls_mode: data.tls_mode, enabled: !!data.enabled, note: data.note || '',
-    };
-    const res = id ? await api('PUT', '/api/routes/' + id, body) : await api('POST', '/api/routes', body);
-    reportApply(res);
-    resetForm();
-    render();
-  } catch (e) { banner(e.message); }
-}
-
-function edit(r) {
-  editingId = r.id;
-  form.domain.value = r.domain;
-  form.upstream.value = r.upstream;
-  form.tls_mode.value = r.tls_mode;
-  form.note.value = r.note;
-  form.upstream_tls.checked = !!r.upstream_tls;
-  form.dataset.enabled = r.enabled ? '1' : '';
-  $('#submit').textContent = 'Save changes';
-  form.domain.focus();
-}
-
-function resetForm() {
-  editingId = null;
-  form.reset();
-  delete form.dataset.enabled;
-  $('#submit').textContent = 'Add route';
+  const body = {
+    domain: data.domain, upstream: data.upstream, upstream_tls: !!data.upstream_tls,
+    tls_mode: data.tls_mode, enabled: !!data.enabled, note: data.note || '',
+  };
+  const res = id ? await api('PUT', '/api/routes/' + id, body) : await api('POST', '/api/routes', body);
+  reportApply(res);
+  await load();
 }
 
 async function remove(r) {
   if (!confirm('Delete ' + r.domain + '?')) return;
-  try { reportApply(await api('DELETE', '/api/routes/' + r.id)); render(); }
+  try { reportApply(await api('DELETE', '/api/routes/' + r.id)); await load(); }
   catch (e) { banner(e.message); }
 }
 
-form.addEventListener('submit', (e) => {
+/* ---------- route dialog ---------- */
+const dlg = $('#route-dlg');
+
+function openDialog(r) {
+  editingId = r ? r.id : null;
+  form.reset();
+  $('#dlg-err').textContent = '';
+  $('#dlg-title').textContent = r ? 'Edit route' : 'Add route';
+  form.dataset.enabled = !r || r.enabled ? '1' : '';
+  if (r) {
+    form.domain.value = r.domain;
+    form.upstream.value = r.upstream;
+    form.tls_mode.value = r.tls_mode;
+    form.note.value = r.note;
+    form.upstream_tls.checked = !!r.upstream_tls;
+  }
+  $('#more').open = !!r && (r.tls_mode !== 'auto' || r.upstream_tls || r.note);
+  dlg.showModal();
+  form.domain.focus();
+}
+
+form.addEventListener('submit', async (e) => {
   e.preventDefault();
-  save(editingId, {
-    domain: form.domain.value, upstream: form.upstream.value, tls_mode: form.tls_mode.value,
-    note: form.note.value, upstream_tls: form.upstream_tls.checked,
-    enabled: editingId ? !!form.dataset.enabled : true,
-  });
+  try {
+    await save(editingId, {
+      domain: form.domain.value, upstream: form.upstream.value, tls_mode: form.tls_mode.value,
+      note: form.note.value, upstream_tls: form.upstream_tls.checked, enabled: !!form.dataset.enabled,
+    });
+    dlg.close();
+  } catch (err) { $('#dlg-err').textContent = err.message; }
 });
 
+$('#add').onclick = () => openDialog(null);
+$('#cancel').onclick = () => dlg.close();
+$('#search').addEventListener('input', renderRows);
+
+/* ---------- system ---------- */
+async function loadSystem() {
+  try {
+    const s = await api('GET', '/api/system');
+    $('#sys-caddy').textContent = s.caddy_ok ? 'running' : 'unreachable';
+    $('#sys-routes').textContent = s.routes_enabled + ' active / ' + s.routes_total + ' total';
+    $('#sys-admin').textContent = s.admin_domain || 'not set (localhost only)';
+    $('#sys-acme').textContent = s.acme_email || 'not set';
+  } catch (e) { banner(e.message); }
+}
+
 $('#reapply').onclick = async () => {
-  try { reportApply(await api('POST', '/api/apply')); } catch (e) { banner(e.message); }
+  try { reportApply(await api('POST', '/api/apply')); loadSystem(); } catch (e) { banner(e.message); }
 };
+$('#show-config').onclick = async () => {
+  $('#config-pre').textContent = JSON.stringify(await api('GET', '/api/config'), null, 2);
+  $('#config-dlg').showModal();
+};
+$('#config-close').onclick = () => $('#config-dlg').close();
 $('#logout').onclick = async () => { await api('POST', '/logout'); location.href = '/login'; };
 
-render();
+load();
 setInterval(refreshStatus, 15000);

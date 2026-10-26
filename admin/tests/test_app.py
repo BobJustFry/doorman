@@ -88,3 +88,12 @@ def test_crud(client):
 def test_validation(client, bad):
     login(client)
     assert client.post("/api/routes", json=bad).status_code == 422
+
+
+def test_system_and_config_endpoints(client):
+    login(client)
+    client.post("/api/routes", json={"domain": "a.example.com", "upstream": "1.2.3.4:80"})
+    cfg = client.get("/api/config").json()
+    assert cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["match"] == [{"host": ["a.example.com"]}]
+    s = client.get("/api/system").json()
+    assert s["routes_total"] == 1 and s["routes_enabled"] == 1 and s["caddy_ok"] is False
