@@ -39,9 +39,16 @@ _FALLBACK_TLS = [{"default_sni": FALLBACK_NAME, "fallback_sni": FALLBACK_NAME}]
 
 
 def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) -> dict:
-    handler: dict = {"handler": "reverse_proxy", "upstreams": [{"dial": upstream}]}
+    handler: dict = {
+        "handler": "reverse_proxy",
+        "upstreams": [{"dial": upstream}],
+        # Caddy would otherwise send the upstream's own address as Host, and name-based
+        # virtual hosts (nginx, Apache, ...) would answer for the wrong site.
+        "headers": {"request": {"set": {"Host": ["{http.request.host}"]}}},
+    }
     if tls:
-        handler["transport"] = {"protocol": "http", "tls": {"insecure_skip_verify": True}}
+        # SNI carries the public name too, so the upstream picks the right certificate/site.
+        handler["transport"] = {"protocol": "http", "tls": {"insecure_skip_verify": True, "server_name": domain}}
     match: dict = {"host": [domain]}
     if lan_only:
         match["remote_ip"] = {"ranges": PRIVATE_RANGES}

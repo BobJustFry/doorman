@@ -179,3 +179,12 @@ def test_dead_upstream_gets_a_friendly_error_page():
         h = errors["handle"][0]
         assert h["status_code"] == "{http.error.status_code}"  # keep the real status for monitoring
         assert "Сервис не отвечает" in h["body"]
+
+
+def test_original_host_and_sni_are_sent_to_upstream():
+    cfg = caddy.build_config([route(domain="webhook.example.com", upstream="192.168.12.20:443", upstream_tls=1)])
+    handler = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["handle"][0]
+    assert handler["headers"]["request"]["set"]["Host"] == ["{http.request.host}"]
+    assert handler["transport"]["tls"]["server_name"] == "webhook.example.com"
+    plain = caddy.build_config([route()])["apps"]["http"]["servers"]["doorman"]["routes"][0]["handle"][0]
+    assert plain["headers"]["request"]["set"]["Host"] == ["{http.request.host}"] and "transport" not in plain
