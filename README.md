@@ -17,6 +17,8 @@ wiki.example.com ─┘    (Caddy + admin UI)  ─▶  192.168.1.20:8080
 - Automatic HTTPS: Let's Encrypt for public domains, Caddy's internal CA for private ones
 - Changes are applied live, with no restarts or dropped connections
 - Upstream health dots (reachable / unreachable)
+- Traffic dashboard: request counters, error rate, charts per domain. Only counters are kept: no IPs, URLs or per-request history.
+- "Unrouted domains" list: names that reached the proxy without a route, with one-click route creation
 - HTTP or HTTPS upstreams, WebSockets and HTTP/3 out of the box
 - Config survives restarts; everything lives in two Docker volumes
 - Tiny: Caddy plus a small FastAPI app (about 100 MB RAM in total)
