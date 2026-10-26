@@ -6,6 +6,8 @@ from pathlib import Path
 
 ACCESS_LOG = "/var/log/caddy/access.log"
 STUB_HTML = (Path(__file__).parent / "stub.html").read_text(encoding="utf-8")
+# Shown when a route exists but the service behind it does not answer (502/503/504).
+ERROR_HTML = (Path(__file__).parent / "error.html").read_text(encoding="utf-8")
 # Served for every name that has no route. HTTPS clients asking for such a name (or for
 # the bare IP) are handed a certificate for this internal name so the page can load.
 FALLBACK_NAME = "doorman.local"
@@ -18,6 +20,18 @@ def _stub_route() -> dict:
         "status_code": 404,
         "headers": {"Content-Type": ["text/html; charset=utf-8"], "Cache-Control": ["no-store"]},
         "body": STUB_HTML,
+    }]}
+
+
+def _upstream_error_routes() -> dict:
+    return {"routes": [{
+        "match": [{"expression": "{http.error.status_code} in [502, 503, 504]"}],
+        "handle": [{
+            "handler": "static_response",
+            "status_code": "{http.error.status_code}",
+            "headers": {"Content-Type": ["text/html; charset=utf-8"], "Cache-Control": ["no-store"]},
+            "body": ERROR_HTML,
+        }],
     }]}
 
 
@@ -65,6 +79,7 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
         "doorman": {
             "listen": [":80", ":443"],
             "routes": http_routes + [_stub_route()],
+            "errors": _upstream_error_routes(),
             "logs": {"default_logger_name": "doorman"},
             "tls_connection_policies": _FALLBACK_TLS,
         }
@@ -73,6 +88,7 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
         servers[f"port_{port}"] = {
             "listen": [f":{port}"],
             "routes": port_routes + [_stub_route()],
+            "errors": _upstream_error_routes(),
             "logs": {"default_logger_name": "doorman"},
             "automatic_https": {"disable_redirects": True},
             "tls_connection_policies": _FALLBACK_TLS,

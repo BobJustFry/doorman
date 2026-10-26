@@ -169,3 +169,13 @@ def test_extra_port_servers_also_serve_the_stub():
     cfg = caddy.build_config([route(ports=[{"port": 8444, "tls": False}])])
     srv = cfg["apps"]["http"]["servers"]["port_8444"]
     assert "match" not in srv["routes"][-1] and "tls_connection_policies" in srv
+
+
+def test_dead_upstream_gets_a_friendly_error_page():
+    cfg = caddy.build_config([route(ports=[{"port": 8444, "tls": False}])])
+    for name in ("doorman", "port_8444"):
+        errors = cfg["apps"]["http"]["servers"][name]["errors"]["routes"][0]
+        assert "502" in errors["match"][0]["expression"] and "504" in errors["match"][0]["expression"]
+        h = errors["handle"][0]
+        assert h["status_code"] == "{http.error.status_code}"  # keep the real status for monitoring
+        assert "not answering" in h["body"]
