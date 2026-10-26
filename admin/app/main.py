@@ -275,17 +275,28 @@ def dismiss_unknown(body: HostIn):
 
 @app.get("/internal/ask")
 def tls_ask(request: Request, domain: str = ""):
-    """Called by Caddy before it would issue an on-demand certificate.
+    """Called by Caddy before it issues an on-demand certificate.
 
-    Always answers 403 (no certificates are ever issued this way); the call only
-    tells us that a client asked for a name that has no route.
+    Every asked name without a route is recorded for the "Unrouted domains" list. A
+    certificate from the internal CA is allowed only for names inside the zones of
+    existing routes (e.g. *.example.com when a route for app.example.com exists), and
+    only while the table of recorded names has room: this keeps scanners that send
+    random names from making the server mint certificates without bound. LAN clients
+    that trust the internal CA then see the stub page without a warning.
     """
     if "x-forwarded-for" in request.headers:  # came through the proxy, not from Caddy itself
         raise HTTPException(404, "Not found")
     domain = domain.strip().lower()
-    if DOMAIN_RE.match(domain) and domain not in {r["domain"] for r in store.list()}:
-        store.note_unknown(domain)
-    return JSONResponse({"allowed": False}, status_code=403)
+    if not DOMAIN_RE.match(domain):
+        return JSONResponse({"allowed": False}, status_code=403)
+    known = {r["domain"] for r in store.list()} | ({ADMIN_DOMAIN} - {""})
+    if domain in known:
+        return JSONResponse({"allowed": True})
+    zones = {d.split(".", 1)[1] for d in known if d.count(".") >= 2}
+    in_zone = any(domain == z or domain.endswith("." + z) for z in zones)
+    recorded = store.note_unknown(domain)
+    allowed = in_zone and recorded
+    return JSONResponse({"allowed": allowed}, status_code=200 if allowed else 403)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])

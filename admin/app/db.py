@@ -164,21 +164,24 @@ class Store:
 
     # ---- domains that reached Doorman without a route -----------------------
 
-    def note_unknown(self, host: str) -> None:
-        """Counts a TLS handshake for a name that has no route (reported by Caddy)."""
+    def note_unknown(self, host: str) -> bool:
+        """Counts a TLS handshake for a name that has no route (reported by Caddy).
+
+        Returns False when the table is full and the name could not be recorded."""
         now = time.time()
         with _lock:
             self.conn.execute("DELETE FROM unknown WHERE ts < ?", (now - 30 * 86400,))
             count = self.conn.execute("SELECT COUNT(*) FROM unknown").fetchone()[0]
             exists = self.conn.execute("SELECT 1 FROM unknown WHERE host=?", (host,)).fetchone()
             if count >= 1000 and not exists:
-                return  # cap the table so scanners cannot grow it without bound
+                return False  # cap the table so scanners cannot grow it without bound
             self.conn.execute(
                 "INSERT INTO unknown (host, n, ts) VALUES (?,1,?)"
                 " ON CONFLICT(host) DO UPDATE SET n=n+1, ts=excluded.ts",
                 (host, now),
             )
             self.conn.commit()
+            return True
 
     def unknown_attempts(self) -> dict[str, int]:
         with _lock:

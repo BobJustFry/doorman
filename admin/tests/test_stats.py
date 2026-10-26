@@ -80,21 +80,25 @@ def test_unknown_domains_from_http_and_tls_attempts(client_with_store):
                     stats.parse_line(line(host="known.example.com")),
                     stats.parse_line(line(host="192.168.12.24"))])  # bare IPs are noise
 
-    assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 403
-    assert client.get("/internal/ask?domain=known.example.com").status_code == 403
-    assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 403
+    # inside the zone of an existing route: allowed (and recorded)
+    assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 200
+    assert client.get("/internal/ask?domain=known.example.com").status_code == 200
+    assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 200
+    # outside every known zone, or not a valid name: refused
+    assert client.get("/internal/ask?domain=stranger.other.org").status_code == 403
     assert client.get("/internal/ask?domain=bad%20name").status_code == 403
 
     unknown = {u["host"]: u for u in client.get("/api/stats").json()["unknown"]}
-    assert set(unknown) == {"new.example.com", "tls-only.example.com"}
+    assert set(unknown) == {"new.example.com", "tls-only.example.com", "stranger.other.org"}
     assert unknown["new.example.com"]["requests"] == 2
     assert unknown["tls-only.example.com"]["attempts"] == 2
 
     client.post("/api/unknown/dismiss", json={"host": "new.example.com"})
-    assert [u["host"] for u in client.get("/api/stats").json()["unknown"]] == ["tls-only.example.com"]
+    left = [u["host"] for u in client.get("/api/stats").json()["unknown"]]
+    assert left == ["tls-only.example.com", "stranger.other.org"]
 
     client.post("/api/routes", json={"domain": "tls-only.example.com", "upstream": "1.2.3.9"})
-    assert client.get("/api/stats").json()["unknown"] == []
+    assert [u["host"] for u in client.get("/api/stats").json()["unknown"]] == ["stranger.other.org"]
 
 
 def test_ask_endpoint_refuses_proxied_requests(client):
