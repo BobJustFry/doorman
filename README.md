@@ -74,6 +74,24 @@ From then on the panel publishes the ports in use and a systemd service opens or
 
 Caddy runs with `network_mode: host`, which is why it can listen on any port without editing `docker-compose.yml`. This works on Linux hosts only (Docker Desktop on Windows/macOS is not supported for production). A side effect: upstreams on the Doorman server itself are reachable as `127.0.0.1:PORT`.
 
+## Stub page and protection from scanners
+
+Any host without a route gets a friendly "Nobody's home" page (HTTP 404) instead of an empty answer, on port 80 and on HTTPS, also when the server is opened by bare IP. For HTTPS, certificates for unknown names are issued by the internal CA only inside the zones of your routes (for example `*.example.com` when `app.example.com` has a route), up to 1000 names, so random scanner names cannot make the server mint certificates endlessly. Other names get a refused handshake.
+
+The panel writes suspicious events (wrong panel password, requests for hosts without a route, scanner-only paths such as `/.env`) to `security.log` as `<epoch> doorman-<kind> ip=<address>`. Install the fail2ban jails once and offenders are banned through `ufw`:
+
+```bash
+sudo bash deploy/install-fail2ban.sh
+```
+
+| Jail | Trigger | Ban |
+|---|---|---|
+| `doorman-auth` | 5 wrong passwords in 10 min | 1 hour |
+| `doorman-stub` | 15 requests for unknown hosts in 10 min | 12 hours |
+| `doorman-probe` | 3 scanner-only paths in 10 min | 24 hours |
+
+Private networks (`10/8`, `172.16/12`, `192.168/16`) and localhost are never banned. List bans with `sudo fail2ban-client status doorman-stub`.
+
 ## Certificates
 
 Each route has a certificate mode:
