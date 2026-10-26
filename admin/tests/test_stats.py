@@ -14,7 +14,7 @@ def line(host="a.example.com", status=200, ts=None, uri="/x?token=secret", ip="1
 def test_parse_keeps_only_counter_fields():
     hit = stats.parse_line(line(host="A.example.com:443"))
     assert hit["host"] == "a.example.com"
-    assert set(hit) == {"ts", "host", "ip", "status", "size"}  # no path, query or method
+    assert set(hit) == {"ts", "host", "ip", "status", "size", "probe"}  # no path, query or method
 
 
 def test_parse_garbage_is_ignored():
@@ -141,3 +141,24 @@ def test_firewall_ports_file_only_lists_enabled_routes(client_with_store):
     from app import main
     data = json.loads((main.DATA_DIR / "firewall-ports.json").read_text())
     assert data == {"tcp": [8444, 9000]}  # disabled routes do not open ports
+
+
+def test_security_log_for_fail2ban(client_with_store):
+    from app import main
+    client, store = client_with_store
+    client.post("/api/routes", json={"domain": "known.example.com", "upstream": "1.2.3.4"})
+    hits = [
+        stats.parse_line(line(host="nothing.example.com", status=404, ip="8.8.4.4")),   # stub hit
+        stats.parse_line(line(host="known.example.com", status=404, ip="8.8.4.5")),     # real 404: fine
+        stats.parse_line(line(host="known.example.com", status=200, ip="8.8.4.6", uri="/.env")),  # probe
+        stats.parse_line(line(host="known.example.com", status=200, ip="8.8.4.7", uri="/index.html")),
+    ]
+    stats.flag_suspicious(hits, {"known.example.com"})
+    client.post("/login", json={"password": "wrong"})
+    log = (main.DATA_DIR / "security.log").read_text()
+    lines = [ln.split(" ", 1)[1] for ln in log.splitlines()]
+    assert "doorman-stub ip=8.8.4.4" in lines
+    assert "doorman-probe ip=8.8.4.6" in lines
+    assert any(ln.startswith("doorman-auth ip=") for ln in lines)
+    assert "8.8.4.5" not in log and "8.8.4.7" not in log
+    assert all(ln.split(" ", 1)[0].isdigit() for ln in log.splitlines())  # epoch timestamps

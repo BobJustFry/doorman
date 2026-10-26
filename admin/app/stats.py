@@ -3,15 +3,19 @@ import ipaddress
 import json
 import logging
 import os
+import re
 import threading
 import time
 from pathlib import Path
 
+from . import security
 from .common import DOMAIN_RE
 from .db import Store
 
 log = logging.getLogger("doorman.stats")
 BATCH_LINES = 5000
+# Paths that only scanners ask for. Only a yes/no is kept, never the path itself.
+PROBE_RE = re.compile(r"^/(\.env|\.git|\.aws|\.ssh|phpmyadmin|cgi-bin|vendor/phpunit|boaform|actuator|\.DS_Store)", re.I)
 
 
 def parse_line(line: bytes) -> dict | None:
@@ -25,9 +29,19 @@ def parse_line(line: bytes) -> dict | None:
             "host": req["host"].split(":")[0].lower(),
             "status": int(e.get("status", 0)),
             "size": int(e.get("size", 0)),
+            "probe": bool(PROBE_RE.match(req.get("uri", ""))),
         }
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
+
+
+def flag_suspicious(hits: list[dict], known_hosts: set[str]) -> None:
+    """Feeds fail2ban: requests for hosts without a route, and scanner-only paths."""
+    for h in hits:
+        if h["status"] == 404 and h["host"] not in known_hosts:
+            security.emit("stub", h["ip"], h["ts"])
+        if h["probe"]:
+            security.emit("probe", h["ip"], h["ts"])
 
 
 def step(store: Store, path: Path) -> int:
@@ -55,6 +69,8 @@ def step(store: Store, path: Path) -> int:
             if hit:
                 hits.append(hit)
     store.add_hits(hits)
+    known = {r["domain"] for r in store.list()} | ({os.environ.get("ADMIN_DOMAIN", "").strip().lower()} - {""})
+    flag_suspicious(hits, known)
     store.set_meta("log_inode", inode)
     store.set_meta("log_pos", str(pos + consumed))
     return lines

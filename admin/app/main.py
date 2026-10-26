@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator, model_validator
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import caddy, stats
+from . import caddy, security, stats
 from .common import DOMAIN_RE
 from .db import Store
 
@@ -184,6 +184,7 @@ async def login(request: Request):
     body = await request.json()
     ok = hmac.compare_digest(str(body.get("password", "")).encode(), ADMIN_PASSWORD.encode())
     if not ok:
+        security.emit("auth", ip)
         _fails[ip] = recent + [now]
         return JSONResponse({"detail": "Wrong password"}, status_code=401)
     _fails.pop(ip, None)
