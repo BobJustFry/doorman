@@ -23,6 +23,7 @@ services:
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
+      ADMIN_TLS: ${ADMIN_TLS:-auto}
       ACME_EMAIL: ${ACME_EMAIL:-}
       CADDY_ADMIN_URL: http://caddy:2019
       DATA_DIR: /data

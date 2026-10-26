@@ -51,6 +51,7 @@ ssh -L 8080:127.0.0.1:8080 user@your-server
 |---|---|---|
 | `ADMIN_PASSWORD` | обязательна | Пароль админки |
 | `ADMIN_DOMAIN` | пусто | Домен, на котором админка открывается по HTTPS |
+| `ADMIN_TLS` | auto | `auto` (Let's Encrypt) or `internal` (Caddy CA) for the admin domain |
 | `ACME_EMAIL` | пусто | E-mail для уведомлений Let's Encrypt |
 | `HTTP_PORT` / `HTTPS_PORT` | 80 / 443 | Порты хоста для прокси |
 | `ADMIN_PORT` | 8080 | Локальный порт админки (только 127.0.0.1) |

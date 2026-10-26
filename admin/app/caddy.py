@@ -11,12 +11,15 @@ def _proxy_route(domain: str, upstream: str, tls: bool) -> dict:
     return {"match": [{"host": [domain]}], "handle": [handler], "terminal": True}
 
 
-def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "") -> dict:
+def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "",
+                 admin_tls: str = "auto") -> dict:
     http_routes = []
     internal_hosts = []
 
     if admin_domain:
         http_routes.append(_proxy_route(admin_domain, "admin:8000", False))
+        if admin_tls == "internal":
+            internal_hosts.append(admin_domain)
 
     for r in routes:
         if not r["enabled"]:

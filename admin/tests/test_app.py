@@ -97,3 +97,9 @@ def test_system_and_config_endpoints(client):
     assert cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["match"] == [{"host": ["a.example.com"]}]
     s = client.get("/api/system").json()
     assert s["routes_total"] == 1 and s["routes_enabled"] == 1 and s["caddy_ok"] is False
+
+
+def test_admin_domain_internal_tls():
+    cfg = caddy.build_config([], admin_domain="panel.corp.ru", admin_tls="internal")
+    policy = cfg["apps"]["tls"]["automation"]["policies"][0]
+    assert policy["subjects"] == ["panel.corp.ru"]

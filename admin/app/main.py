@@ -21,6 +21,7 @@ DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_DOMAIN = os.environ.get("ADMIN_DOMAIN", "").strip().lower()
 ACME_EMAIL = os.environ.get("ACME_EMAIL", "").strip()
+ADMIN_TLS = os.environ.get("ADMIN_TLS", "auto").strip()
 CADDY_URL = os.environ.get("CADDY_ADMIN_URL", "http://caddy:2019")
 STATIC = Path(__file__).parent / "static"
 
@@ -44,7 +45,7 @@ _fails: dict[str, list[float]] = {}
 def apply_config() -> str | None:
     """Push current routes to Caddy. Returns an error message or None."""
     try:
-        caddy.push(caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL), CADDY_URL)
+        caddy.push(caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL, ADMIN_TLS), CADDY_URL)
         return None
     except RuntimeError as e:
         return str(e)
