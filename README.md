@@ -53,7 +53,7 @@ Or set `ADMIN_DOMAIN=panel.example.com` in `.env` to serve the panel over HTTPS 
 | `ADMIN_DOMAIN` | empty | Serve the panel on this domain over HTTPS |
 | `ACME_EMAIL` | empty | E-mail for Let's Encrypt notices |
 | `HTTP_PORT` / `HTTPS_PORT` | 80 / 443 | Host ports for the proxy |
-| `ADMIN_PORT` | 8080 | Local port (127.0.0.1 only) for the panel |
+| `ADMIN_PORT` / `ADMIN_BIND` | 8080 / 127.0.0.1 | Port and interface for the panel (set `ADMIN_BIND=0.0.0.0` to open it on the LAN) |
 
 ## Certificates
 

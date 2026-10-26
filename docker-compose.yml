@@ -31,7 +31,7 @@ services:
     # Admin UI is reachable only from the host itself (use an SSH tunnel)
     # unless ADMIN_DOMAIN is set, in which case Caddy serves it over HTTPS.
     ports:
-      - "127.0.0.1:${ADMIN_PORT:-8080}:8000"
+      - "${ADMIN_BIND:-127.0.0.1}:${ADMIN_PORT:-8080}:8000"
     depends_on: [caddy]
     networks: [doorman]
 
