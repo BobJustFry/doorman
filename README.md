@@ -62,10 +62,15 @@ Or set `ADMIN_DOMAIN=panel.example.com` in `.env` to serve the panel over HTTPS 
 
 Besides 80/443, a route can be published on additional ports (for example `alex.example.com:8444`). Open **Routes → Edit → Advanced → Extra ports** and add the port. It is forwarded 1:1: public port `8444` goes to port `8444` of the upstream host. Tick *HTTPS upstream* if that port speaks TLS.
 
-For every extra port also:
+For every extra port also forward it on your router to the Doorman server.
 
-- open it in the server firewall, e.g. `sudo ufw allow 8444/tcp`
-- forward it on your router to the Doorman server
+The server firewall can follow your routes automatically. Install the small helper once (it needs `ufw` and root):
+
+```bash
+sudo bash deploy/install-firewall-sync.sh
+```
+
+From then on the panel publishes the ports in use and a systemd service opens or closes the matching `ufw` rules (tagged `doorman-route`; your other rules are never touched). Without the helper, open ports yourself: `sudo ufw allow 8444/tcp`.
 
 Caddy runs with `network_mode: host`, which is why it can listen on any port without editing `docker-compose.yml`. This works on Linux hosts only (Docker Desktop on Windows/macOS is not supported for production). A side effect: upstreams on the Doorman server itself are reachable as `127.0.0.1:PORT`.
 
