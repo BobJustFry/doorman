@@ -143,3 +143,12 @@ button.link-chip:hover { text-decoration: underline; }
   color-scheme: dark;
   --bg: #12151c; --fg: #e6e9f0; --card: #1b2030; --muted: #8b93a7; --line: #2a3045;
 }
+
+.client-tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.client-tools input { width: 220px; max-width: 100%; }
+.more-row { display: flex; gap: 8px; justify-content: center; margin-top: 10px; }
+.more-row button[hidden] { display: none; }
+tr.group { cursor: pointer; }
+tr.group:hover td { background: var(--bg); }
+tr.child td { background: var(--bg); border-bottom-color: transparent; font-size: 14px; }
+.chevron { width: 22px; font-size: 14px; color: var(--muted); }

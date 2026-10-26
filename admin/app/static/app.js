@@ -256,7 +256,6 @@ $('#search').addEventListener('input', renderRows);
 
 /* ---------- dashboard ---------- */
 let statsRange = '24h';
-let clientsFilter = '';
 let lastClients = [];
 const NS = 'http://www.w3.org/2000/svg';
 const COLORS = {ok: 'var(--accent)', r3: '#8aa7f8', c4: '#e0a100', c5: 'var(--bad)'};
@@ -438,19 +437,76 @@ function verdictBadge(v) {
   return b;
 }
 
-/* Clients: "who knocked", per IP, for routed and unrouted domains alike. */
-function drawClients() {
-  const hosts = [...new Set(lastClients.map((c) => c.host))].sort();
-  const sel = $('#clients-filter');
-  renderIf('clients-hosts', hosts, () => {
-    sel.replaceChildren(new Option('All domains', ''), ...hosts.map((h) => new Option(h, h)));
-  });
-  if (clientsFilter && !hosts.includes(clientsFilter)) clientsFilter = '';
-  sel.value = clientsFilter;
+/* Clients: "who knocked", for routed and unrouted domains alike. Two views: by address, or by
+   domain with a collapsible list of the addresses behind each domain. */
+const clientsUi = {view: 'ip', query: '', limit: 30, open: new Set(), expandAll: false};
 
+function netBadge(lan) {
+  return el('span', lan ? 'LAN' : 'Internet', 'badge ' + (lan ? 'lan' : 'wan'));
+}
+
+function ipLink(ip) {
+  const b = el('button', ip, 'link');
+  b.title = 'Why is it listed? Click for the conclusion';
+  b.onclick = () => openIp(ip);
+  return b;
+}
+
+function flagBadges(probes, stubs, lan, ip) {
+  const out = [];
+  if (probes) {
+    const b = el('span', 'Scanner', 'badge bad');
+    b.title = probes + ' request(s) for scanner-only paths';
+    out.push(b);
+  } else if (stubs >= 10 && !lan) {
+    const b = el('span', 'Suspicious', 'badge warn');
+    b.title = stubs + ' requests for names that do not exist';
+    out.push(b);
+  }
+  if (ip && bannedIps.has(ip)) {
+    const b = el('span', 'Blocked', 'badge dark');
+    b.title = 'Blocked by fail2ban on the server';
+    out.push(b);
+  }
+  return out;
+}
+
+function td(...nodes) {
+  const c = el('td');
+  c.append(...nodes);
+  return c;
+}
+
+const errCell = (n) => {
+  const c = el('td', n ? n.toLocaleString() : '–');
+  if (n) c.style.color = 'var(--bad)';
+  return c;
+};
+
+function setClientsHead(cols) {
+  const tr = el('tr');
+  for (const c of cols) tr.append(el('th', c));
+  $('#clients-head').replaceChildren(tr);
+}
+
+function drawClients() {
+  const q = clientsUi.query.trim().toLowerCase();
+  const pairs = lastClients.filter((c) => !q || c.ip.toLowerCase().includes(q) || c.host.toLowerCase().includes(q));
+  const rows = clientsUi.view === 'domain' ? domainRows(pairs, q) : addressRows(pairs);
+  $('#clients-rows').replaceChildren(...rows.nodes);
+  $('#clients-empty').hidden = rows.total > 0;
+  $('#clients-empty').textContent = q ? 'Nothing found for “' + clientsUi.query.trim() + '”.' : 'No clients in this period yet.';
+  const more = $('#clients-more');
+  more.hidden = rows.total <= clientsUi.limit;
+  more.textContent = 'Show more (' + (rows.total - clientsUi.limit) + ' left)';
+  $('#clients-expand').hidden = clientsUi.view !== 'domain';
+  $('#clients-expand').textContent = clientsUi.expandAll ? 'Collapse all' : 'Expand all';
+}
+
+function addressRows(pairs) {
+  setClientsHead(['IP address', 'Network', 'Domains', 'Requests', 'Errors', 'Flags']);
   const byIp = new Map();
-  for (const c of lastClients) {
-    if (clientsFilter && c.host !== clientsFilter) continue;
+  for (const c of pairs) {
     const e = byIp.get(c.ip) || {ip: c.ip, lan: c.lan, requests: 0, errors: 0, probes: 0, stubs: 0, domains: []};
     e.requests += c.requests;
     e.errors += c.errors;
@@ -459,13 +515,9 @@ function drawClients() {
     e.domains.push(c);
     byIp.set(c.ip, e);
   }
-  const rows = [...byIp.values()].sort((a, b) => b.requests - a.requests).slice(0, 30);
-  $('#clients-empty').hidden = rows.length > 0;
-  $('#clients-rows').replaceChildren(...rows.map((c) => {
+  const all = [...byIp.values()].sort((a, b) => b.requests - a.requests);
+  const nodes = all.slice(0, clientsUi.limit).map((c) => {
     const tr = el('tr');
-    const net = el('span', c.lan ? 'LAN' : 'Internet', 'badge ' + (c.lan ? 'lan' : 'wan'));
-    const netTd = el('td');
-    netTd.append(net);
     const domTd = el('td');
     for (const d of c.domains.sort((a, b) => b.requests - a.requests).slice(0, 4)) {
       const chip = el('span', d.host + ' · ' + d.requests.toLocaleString(), 'chip' + (d.routed ? '' : ' unrouted'));
@@ -473,32 +525,70 @@ function drawClients() {
       domTd.append(chip);
     }
     if (c.domains.length > 4) domTd.append(el('span', '+' + (c.domains.length - 4), 'chip'));
-    const errTd = el('td', c.errors ? c.errors.toLocaleString() : '–');
-    if (c.errors) errTd.style.color = 'var(--bad)';
-    const flagTd = el('td');
-    if (c.probes) {
-      const b = el('span', 'Scanner', 'badge bad');
-      b.title = c.probes + ' request(s) for scanner-only paths';
-      flagTd.append(b);
-    } else if (c.stubs >= 10 && !c.lan) {
-      const b = el('span', 'Suspicious', 'badge warn');
-      b.title = c.stubs + ' requests for names that do not exist';
-      flagTd.append(b);
-    }
-    if (bannedIps.has(c.ip)) {
-      const b = el('span', 'Blocked', 'badge dark');
-      b.title = 'Blocked by fail2ban on the server';
-      flagTd.append(b);
-    }
-    const ipTd = el('td');
-    const ipBtn = el('button', c.ip, 'link');
-    ipBtn.title = 'Why is it listed? Click for the conclusion';
-    ipBtn.onclick = () => openIp(c.ip);
-    ipTd.append(ipBtn);
-    tr.append(ipTd, netTd, domTd, el('td', c.requests.toLocaleString()), errTd, flagTd);
+    tr.append(td(ipLink(c.ip)), td(netBadge(c.lan)), domTd, el('td', c.requests.toLocaleString()), errCell(c.errors),
+      td(...flagBadges(c.probes, c.stubs, c.lan, c.ip)));
     return tr;
-  }));
+  });
+  return {nodes, total: all.length};
 }
+
+function domainRows(pairs, q) {
+  setClientsHead(['', 'Domain', 'Addresses', 'Requests', 'Errors', 'Flags']);
+  const byHost = new Map();
+  for (const c of pairs) {
+    const e = byHost.get(c.host) || {host: c.host, routed: c.routed, requests: 0, errors: 0, ips: []};
+    e.requests += c.requests;
+    e.errors += c.errors;
+    e.ips.push(c);
+    byHost.set(c.host, e);
+  }
+  const all = [...byHost.values()].sort((a, b) => b.requests - a.requests);
+  const nodes = [];
+  for (const g of all.slice(0, clientsUi.limit)) {
+    const open = clientsUi.expandAll || clientsUi.open.has(g.host) || (q && g.ips.some((c) => c.ip.toLowerCase().includes(q)));
+    const scanners = g.ips.filter((c) => c.probes).length;
+    const noisy = g.ips.filter((c) => !c.probes && !c.lan && c.stubs >= 10).length;
+    const flags = [];
+    if (scanners) { const b = el('span', scanners + ' scanner' + (scanners > 1 ? 's' : ''), 'badge bad'); flags.push(b); }
+    if (noisy) { const b = el('span', noisy + ' suspicious', 'badge warn'); flags.push(b); }
+    const toggle = el('button', open ? '▾' : '▸', 'link chevron');
+    toggle.title = open ? 'Collapse' : 'Show the addresses';
+    toggle.onclick = () => {
+      if (clientsUi.open.has(g.host)) clientsUi.open.delete(g.host); else clientsUi.open.add(g.host);
+      clientsUi.expandAll = false;
+      drawClients();
+    };
+    const hostTd = el('td', g.host);
+    if (!g.routed) hostTd.append(el('div', 'no route here', 'muted'));
+    const tr = el('tr', undefined, 'group');
+    tr.onclick = (e) => { if (!e.target.closest('button')) toggle.click(); };
+    tr.append(td(toggle), hostTd, el('td', g.ips.length.toLocaleString()), el('td', g.requests.toLocaleString()),
+      errCell(g.errors), td(...flags));
+    nodes.push(tr);
+    if (open) {
+      for (const c of g.ips.sort((a, b) => b.requests - a.requests)) {
+        const child = el('tr', undefined, 'child');
+        const addr = td(ipLink(c.ip), ' ', netBadge(c.lan));
+        child.append(el('td'), addr, el('td'), el('td', c.requests.toLocaleString()), errCell(c.errors),
+          td(...flagBadges(c.probes, c.stubs, c.lan, c.ip)));
+        nodes.push(child);
+      }
+    }
+  }
+  return {nodes, total: all.length};
+}
+
+$('#clients-search').addEventListener('input', (e) => { clientsUi.query = e.target.value; clientsUi.limit = 30; drawClients(); });
+document.querySelectorAll('#clients-view button').forEach((b) => {
+  b.onclick = () => {
+    clientsUi.view = b.dataset.view;
+    clientsUi.limit = 30;
+    document.querySelectorAll('#clients-view button').forEach((x) => x.classList.toggle('active', x === b));
+    drawClients();
+  };
+});
+$('#clients-more').onclick = () => { clientsUi.limit += 30; drawClients(); };
+$('#clients-expand').onclick = () => { clientsUi.expandAll = !clientsUi.expandAll; if (!clientsUi.expandAll) clientsUi.open.clear(); drawClients(); };
 
 async function loadStats() {
   if (!visible('stats')) return;
@@ -536,7 +626,6 @@ document.querySelectorAll('#range button').forEach((b) => {
   };
 });
 
-$('#clients-filter').onchange = (e) => { clientsFilter = e.target.value; drawClients(); };
 
 /* ---------- system ---------- */
 async function loadSystem() {

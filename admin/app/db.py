@@ -229,7 +229,7 @@ class Store:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def clients_since(self, table: str, since: float, limit: int = 300) -> list[dict]:
+    def clients_since(self, table: str, since: float, limit: int = 1500) -> list[dict]:
         key = {"clients_hourly": "hour", "clients_minute": "minute"}[table]
         step = 3600 if key == "hour" else 60
         with _lock:

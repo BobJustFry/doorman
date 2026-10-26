@@ -77,16 +77,26 @@
     <div class="card panel">
       <div class="panel-head">
         <h3>Clients</h3>
-        <select id="clients-filter" aria-label="Filter by domain"></select>
+        <div class="client-tools">
+          <input id="clients-search" type="search" placeholder="Search address or domain…" aria-label="Search clients">
+          <div class="seg" id="clients-view">
+            <button data-view="ip" class="active">By address</button>
+            <button data-view="domain">By domain</button>
+          </div>
+        </div>
       </div>
-      <p class="muted hint">Who is knocking, by IP address: routed and unrouted domains alike.</p>
+      <p class="muted hint">Who is knocking, routed and unrouted domains alike. Click an address for the conclusion about it.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>IP address</th><th>Network</th><th>Domains</th><th>Requests</th><th>Errors</th><th>Flags</th></tr></thead>
+          <thead id="clients-head"></thead>
           <tbody id="clients-rows"></tbody>
         </table>
       </div>
       <p id="clients-empty" class="muted pad" hidden>No clients in this period yet.</p>
+      <div class="more-row">
+        <button class="ghost" id="clients-more" hidden></button>
+        <button class="ghost" id="clients-expand" hidden>Expand all</button>
+      </div>
     </div>
 
     <div class="card panel">
