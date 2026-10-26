@@ -1,45 +1,39 @@
 services:
+  # Caddy and the admin app share the host network: Caddy can then listen on any
+  # port the admin panel asks for (80/443 plus extra ports), sees real client IPs
+  # and reaches LAN hosts directly. The two talk over 127.0.0.1 only.
   caddy:
     image: caddy:2
     container_name: doorman-caddy
     restart: unless-stopped
-    ports:
-      - "${HTTP_PORT:-80}:80"
-      - "${HTTPS_PORT:-443}:443"
-      - "${HTTPS_PORT:-443}:443/udp"
+    network_mode: host
     volumes:
       - ./caddy/caddy.json:/etc/caddy/caddy.json:ro
       - caddy_data:/data
       - caddy_config:/config
       - caddy_logs:/var/log/caddy
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json", "--resume"]
-    networks: [doorman]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   admin:
     build: ./admin
     container_name: doorman-admin
     restart: unless-stopped
+    network_mode: host
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
       ADMIN_DOMAIN: ${ADMIN_DOMAIN:-}
       ADMIN_TLS: ${ADMIN_TLS:-auto}
       ACME_EMAIL: ${ACME_EMAIL:-}
-      CADDY_ADMIN_URL: http://caddy:2019
+      # Panel listens on ADMIN_BIND:ADMIN_PORT (127.0.0.1 by default: use an SSH tunnel
+      # or ADMIN_DOMAIN, which Caddy serves over HTTPS for the LAN only).
+      ADMIN_BIND: ${ADMIN_BIND:-127.0.0.1}
+      ADMIN_PORT: ${ADMIN_PORT:-8080}
+      CADDY_ADMIN_URL: http://127.0.0.1:2019
       DATA_DIR: /data
     volumes:
       - admin_data:/data
       - caddy_logs:/logs:ro
-    # Admin UI is reachable only from the host itself (use an SSH tunnel)
-    # unless ADMIN_DOMAIN is set, in which case Caddy serves it over HTTPS.
-    ports:
-      - "${ADMIN_BIND:-127.0.0.1}:${ADMIN_PORT:-8080}:8000"
     depends_on: [caddy]
-    networks: [doorman]
-
-networks:
-  doorman:
 
 volumes:
   caddy_data:

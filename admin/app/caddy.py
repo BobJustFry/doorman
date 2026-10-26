@@ -4,9 +4,6 @@ import urllib.error
 import urllib.request
 
 ACCESS_LOG = "/var/log/caddy/access.log"
-ASK_URL = "http://admin:8000/internal/ask"
-
-
 PRIVATE_RANGES = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "::1/128"]
 
 
@@ -21,15 +18,16 @@ def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) 
 
 
 def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "",
-                 admin_tls: str = "auto") -> dict:
+                 admin_tls: str = "auto", admin_port: int = 8080) -> dict:
     http_routes = []
     internal_hosts = []
     all_hosts = []
+    extra: dict[int, list[dict]] = {}  # extra public port -> routes served on it
 
     if admin_domain:
         all_hosts.append(admin_domain)
         # The panel is never served to the internet, even if 80/443 are forwarded to this server.
-        http_routes.append(_proxy_route(admin_domain, "admin:8000", False, lan_only=True))
+        http_routes.append(_proxy_route(admin_domain, f"127.0.0.1:{admin_port}", False, lan_only=True))
         if admin_tls == "internal":
             internal_hosts.append(admin_domain)
 
@@ -40,9 +38,29 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
         http_routes.append(_proxy_route(r["domain"], r["upstream"], bool(r["upstream_tls"])))
         if r["tls_mode"] == "internal":
             internal_hosts.append(r["domain"])
+        # Extra ports are forwarded 1:1: public port N goes to port N of the upstream host.
+        host = r["upstream"].rsplit(":", 1)[0]
+        for p in r.get("ports", []):
+            extra.setdefault(p["port"], []).append(
+                _proxy_route(r["domain"], f"{host}:{p['port']}", bool(p["tls"])))
+
+    servers: dict = {
+        "doorman": {
+            "listen": [":80", ":443"],
+            "routes": http_routes,
+            "logs": {"default_logger_name": "doorman"},
+        }
+    }
+    for port, port_routes in sorted(extra.items()):
+        servers[f"port_{port}"] = {
+            "listen": [f":{port}"],
+            "routes": port_routes,
+            "logs": {"default_logger_name": "doorman"},
+            "automatic_https": {"disable_redirects": True},
+        }
 
     config: dict = {
-        "admin": {"listen": ":2019", "origins": ["caddy:2019"]},
+        "admin": {"listen": "127.0.0.1:2019"},
         "logging": {
             "logs": {
                 "default": {"exclude": ["http.log.access.doorman"]},
@@ -56,17 +74,7 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
                 },
             }
         },
-        "apps": {
-            "http": {
-                "servers": {
-                    "doorman": {
-                        "listen": [":80", ":443"],
-                        "routes": http_routes,
-                        "logs": {"default_logger_name": "doorman"},
-                    }
-                }
-            }
-        },
+        "apps": {"http": {"servers": servers}},
     }
 
     public_hosts = [h for h in all_hosts if h not in internal_hosts]
@@ -85,7 +93,9 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
     config["apps"]["tls"] = {
         "automation": {
             "policies": policies,
-            "on_demand": {"permission": {"module": "http", "endpoint": ASK_URL}},
+            "on_demand": {
+                "permission": {"module": "http", "endpoint": f"http://127.0.0.1:{admin_port}/internal/ask"}
+            },
         }
     }
     return config

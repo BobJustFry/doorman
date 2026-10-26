@@ -1,7 +1,6 @@
 {
   "admin": {
-    "listen": ":2019",
-    "origins": ["caddy:2019"]
+    "listen": "127.0.0.1:2019"
   },
   "apps": {
     "http": {

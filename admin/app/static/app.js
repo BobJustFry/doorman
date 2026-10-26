@@ -63,6 +63,8 @@ function renderRows() {
     dot.dataset.id = r.id;
     dotTd.append(dot);
     const domainTd = el('td', r.domain);
+    const extra = (r.ports || []).map((p) => ':' + p.port).join('  ');
+    if (extra) domainTd.append(el('div', 'ports ' + extra, 'muted'));
     if (r.note) domainTd.append(el('div', r.note, 'muted'));
     const act = el('td', undefined, 'actions');
     act.append(
@@ -102,6 +104,7 @@ async function save(id, data) {
   const body = {
     domain: data.domain, upstream: data.upstream, upstream_tls: !!data.upstream_tls,
     tls_mode: data.tls_mode, enabled: !!data.enabled, note: data.note || '',
+    ports: data.ports || [],
   };
   const res = id ? await api('PUT', '/api/routes/' + id, body) : await api('POST', '/api/routes', body);
   reportApply(res);
@@ -131,11 +134,41 @@ function openDialog(r, prefillDomain) {
     form.note.value = r.note;
     form.upstream_tls.checked = !!r.upstream_tls;
   }
-  $('#more').open = !!r && (r.tls_mode !== 'auto' || r.upstream_tls || r.note);
+  $('#ports-list').replaceChildren();
+  for (const p of (r && r.ports) || []) addPortRow(p.port, p.tls);
+  $('#more').open = !!r && (r.tls_mode !== 'auto' || r.upstream_tls || r.note || (r.ports || []).length > 0);
   if (prefillDomain) form.domain.value = prefillDomain;
   dlg.showModal();
   (prefillDomain ? form.upstream : form.domain).focus();
 }
+
+function addPortRow(port, tls) {
+  const row = el('div', undefined, 'port-row');
+  const num = el('input');
+  num.type = 'number';
+  num.min = 1;
+  num.max = 65535;
+  num.placeholder = '8444';
+  num.value = port || '';
+  const chk = el('input');
+  chk.type = 'checkbox';
+  chk.checked = !!tls;
+  const lbl = el('label', undefined, 'check');
+  lbl.append(chk, document.createTextNode(' HTTPS upstream'));
+  row.append(num, lbl, btn('✕', 'danger icon', () => row.remove()));
+  row.dataset.row = '1';
+  $('#ports-list').append(row);
+  if (!port) num.focus();
+}
+
+function readPorts() {
+  return [...document.querySelectorAll('#ports-list [data-row]')]
+    .map((r) => ({port: parseInt(r.querySelector('input[type=number]').value, 10),
+      tls: r.querySelector('input[type=checkbox]').checked}))
+    .filter((p) => Number.isInteger(p.port));
+}
+
+$('#add-port').onclick = () => addPortRow('', false);
 
 form.addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -143,6 +176,7 @@ form.addEventListener('submit', async (e) => {
     await save(editingId, {
       domain: form.domain.value, upstream: form.upstream.value, tls_mode: form.tls_mode.value,
       note: form.note.value, upstream_tls: form.upstream_tls.checked, enabled: !!form.dataset.enabled,
+      ports: readPorts(),
     });
     dlg.close();
   } catch (err) { $('#dlg-err').textContent = err.message; }
@@ -360,5 +394,6 @@ $('#config-close').onclick = () => $('#config-dlg').close();
 $('#logout').onclick = async () => { await api('POST', '/logout'); location.href = '/login'; };
 
 load();
+loadStats();
 setInterval(refreshStatus, 15000);
 setInterval(loadStats, 10000);

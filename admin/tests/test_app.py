@@ -40,7 +40,7 @@ def test_internal_tls_policy_and_https_upstream():
 def test_admin_domain_route_first():
     cfg = caddy.build_config([route()], admin_domain="panel.example.com")
     first = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]
-    assert first["handle"][0]["upstreams"] == [{"dial": "admin:8000"}]
+    assert first["handle"][0]["upstreams"] == [{"dial": "127.0.0.1:8080"}]
 
 
 def login(c):
@@ -115,3 +115,36 @@ def test_access_log_configured():
     cfg = caddy.build_config([])
     assert cfg["apps"]["http"]["servers"]["doorman"]["logs"]["default_logger_name"] == "doorman"
     assert cfg["logging"]["logs"]["access"]["include"] == ["http.log.access.doorman"]
+
+
+def test_extra_ports_are_forwarded_one_to_one():
+    cfg = caddy.build_config([route(domain="alex.example.com", upstream="192.168.12.20:443",
+                                    ports=[{"port": 8444, "tls": True}, {"port": 9000, "tls": False}])])
+    servers = cfg["apps"]["http"]["servers"]
+    assert servers["port_8444"]["listen"] == [":8444"]
+    handler = servers["port_8444"]["routes"][0]["handle"][0]
+    assert handler["upstreams"] == [{"dial": "192.168.12.20:8444"}]
+    assert handler["transport"]["tls"]["insecure_skip_verify"] is True
+    plain = servers["port_9000"]["routes"][0]["handle"][0]
+    assert plain["upstreams"] == [{"dial": "192.168.12.20:9000"}] and "transport" not in plain
+    assert servers["doorman"]["listen"] == [":80", ":443"]
+
+
+def test_two_domains_can_share_an_extra_port():
+    cfg = caddy.build_config([
+        route(domain="a.example.com", ports=[{"port": 8444, "tls": False}]),
+        route(domain="b.example.com", upstream="10.0.0.6:80", ports=[{"port": 8444, "tls": False}]),
+    ])
+    assert len(cfg["apps"]["http"]["servers"]["port_8444"]["routes"]) == 2
+
+
+def test_ports_api_roundtrip_and_validation(client):
+    login(client)
+    body = {"domain": "alex.example.com", "upstream": "192.168.12.20", "ports": [{"port": 8444, "tls": True}]}
+    res = client.post("/api/routes", json=body).json()
+    assert res["route"]["ports"] == [{"port": 8444, "tls": True}]
+    assert client.get("/api/routes").json()[0]["ports"] == [{"port": 8444, "tls": True}]
+    for bad in ([{"port": 443}], [{"port": 80}], [{"port": 2019}], [{"port": 0}], [{"port": 70000}],
+                [{"port": 8444}, {"port": 8444}]):
+        r = client.post("/api/routes", json={**body, "domain": "x.example.com", "ports": bad})
+        assert r.status_code == 422, bad

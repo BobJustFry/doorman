@@ -10,8 +10,8 @@
 <header>
   <h1>🚪 Doorman</h1>
   <nav id="tabs">
-    <button data-tab="routes" class="active">Routes</button>
-    <button data-tab="stats">Stats</button>
+    <button data-tab="stats" class="active">Dashboard</button>
+    <button data-tab="routes">Routes</button>
     <button data-tab="system">System</button>
   </nav>
   <button class="ghost" id="logout">Sign out</button>
@@ -20,7 +20,7 @@
 <main>
   <div id="banner" class="banner" hidden></div>
 
-  <section id="tab-routes">
+  <section id="tab-routes" hidden>
     <div class="bar">
       <input id="search" type="search" placeholder="Search domain or IP…">
       <button id="add">+ Add route</button>
@@ -34,7 +34,7 @@
     </div>
   </section>
 
-  <section id="tab-stats" hidden>
+  <section id="tab-stats">
     <div class="bar">
       <div class="seg" id="range">
         <button data-range="1h">1 hour</button>
@@ -113,6 +113,14 @@
       </label>
       <label class="check"><input type="checkbox" name="upstream_tls"> Upstream speaks HTTPS</label>
       <label>Note <input name="note" placeholder="optional"></label>
+      <div class="ports">
+        <div class="ports-head">
+          <span>Extra ports</span>
+          <button type="button" class="ghost icon" id="add-port">+ Add port</button>
+        </div>
+        <p class="muted hint">Forwarded 1:1: public port N goes to port N of the upstream host. Also open the port in the server firewall and forward it on your router.</p>
+        <div id="ports-list"></div>
+      </div>
     </details>
     <p id="dlg-err" class="err"></p>
     <div class="actions">

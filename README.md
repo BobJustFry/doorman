@@ -58,6 +58,17 @@ Or set `ADMIN_DOMAIN=panel.example.com` in `.env` to serve the panel over HTTPS 
 | `HTTP_PORT` / `HTTPS_PORT` | 80 / 443 | Host ports for the proxy |
 | `ADMIN_PORT` / `ADMIN_BIND` | 8080 / 127.0.0.1 | Port and interface for the panel (set `ADMIN_BIND=0.0.0.0` to open it on the LAN) |
 
+## Extra ports
+
+Besides 80/443, a route can be published on additional ports (for example `alex.example.com:8444`). Open **Routes → Edit → Advanced → Extra ports** and add the port. It is forwarded 1:1: public port `8444` goes to port `8444` of the upstream host. Tick *HTTPS upstream* if that port speaks TLS.
+
+For every extra port also:
+
+- open it in the server firewall, e.g. `sudo ufw allow 8444/tcp`
+- forward it on your router to the Doorman server
+
+Caddy runs with `network_mode: host`, which is why it can listen on any port without editing `docker-compose.yml`. This works on Linux hosts only (Docker Desktop on Windows/macOS is not supported for production). A side effect: upstreams on the Doorman server itself are reachable as `127.0.0.1:PORT`.
+
 ## Certificates
 
 Each route has a certificate mode:

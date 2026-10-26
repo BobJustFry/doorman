@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 import time
@@ -10,6 +11,12 @@ _lock = threading.Lock()
 _COUNTERS = """n INTEGER NOT NULL DEFAULT 0, s2 INTEGER NOT NULL DEFAULT 0,
     s3 INTEGER NOT NULL DEFAULT 0, s4 INTEGER NOT NULL DEFAULT 0, s5 INTEGER NOT NULL DEFAULT 0,
     bytes INTEGER NOT NULL DEFAULT 0"""
+
+
+def _route(row: sqlite3.Row) -> dict:
+    d = dict(row)
+    d["ports"] = json.loads(d.get("ports") or "[]")
+    return d
 
 
 class Store:
@@ -40,6 +47,9 @@ class Store:
                 CREATE TABLE IF NOT EXISTS ignored (host TEXT PRIMARY KEY);
                 DROP TABLE IF EXISTS recent;"""
             )
+            cols = [r[1] for r in self.conn.execute("PRAGMA table_info(routes)")]
+            if "ports" not in cols:  # extra ports per route, stored as JSON
+                self.conn.execute("ALTER TABLE routes ADD COLUMN ports TEXT NOT NULL DEFAULT '[]'")
             self.conn.commit()
 
     # ---- routes ------------------------------------------------------------
@@ -47,20 +57,20 @@ class Store:
     def list(self) -> list[dict]:
         with _lock:
             rows = self.conn.execute("SELECT * FROM routes ORDER BY domain").fetchall()
-        return [dict(r) for r in rows]
+        return [_route(r) for r in rows]
 
     def get(self, route_id: int) -> dict | None:
         with _lock:
             row = self.conn.execute("SELECT * FROM routes WHERE id=?", (route_id,)).fetchone()
-        return dict(row) if row else None
+        return _route(row) if row else None
 
     def create(self, r: dict) -> dict:
         with _lock:
             cur = self.conn.execute(
-                "INSERT INTO routes (domain, upstream, upstream_tls, tls_mode, enabled, note)"
-                " VALUES (?,?,?,?,?,?)",
+                "INSERT INTO routes (domain, upstream, upstream_tls, tls_mode, enabled, note, ports)"
+                " VALUES (?,?,?,?,?,?,?)",
                 (r["domain"], r["upstream"], int(r["upstream_tls"]), r["tls_mode"],
-                 int(r["enabled"]), r["note"]),
+                 int(r["enabled"]), r["note"], json.dumps(r.get("ports", []))),
             )
             self.conn.commit()
             new_id = cur.lastrowid
@@ -70,9 +80,9 @@ class Store:
         with _lock:
             self.conn.execute(
                 "UPDATE routes SET domain=?, upstream=?, upstream_tls=?, tls_mode=?,"
-                " enabled=?, note=? WHERE id=?",
+                " enabled=?, note=?, ports=? WHERE id=?",
                 (r["domain"], r["upstream"], int(r["upstream_tls"]), r["tls_mode"],
-                 int(r["enabled"]), r["note"], route_id),
+                 int(r["enabled"]), r["note"], json.dumps(r.get("ports", [])), route_id),
             )
             self.conn.commit()
         return self.get(route_id)

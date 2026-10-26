@@ -23,7 +23,9 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
 ADMIN_DOMAIN = os.environ.get("ADMIN_DOMAIN", "").strip().lower()
 ACME_EMAIL = os.environ.get("ACME_EMAIL", "").strip()
 ADMIN_TLS = os.environ.get("ADMIN_TLS", "auto").strip()
-CADDY_URL = os.environ.get("CADDY_ADMIN_URL", "http://caddy:2019")
+ADMIN_PORT = int(os.environ.get("ADMIN_PORT", "8080"))
+CADDY_URL = os.environ.get("CADDY_ADMIN_URL", "http://127.0.0.1:2019")
+RESERVED_PORTS = {80, 443, 2019, ADMIN_PORT}  # standard ports, Caddy's admin API, this panel
 STATIC = Path(__file__).parent / "static"
 
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$")
@@ -42,10 +44,14 @@ store = Store(DATA_DIR / "doorman.db")
 _fails: dict[str, list[float]] = {}
 
 
+def current_config() -> dict:
+    return caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL, ADMIN_TLS, ADMIN_PORT)
+
+
 def apply_config() -> str | None:
     """Push current routes to Caddy. Returns an error message or None."""
     try:
-        caddy.push(caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL, ADMIN_TLS), CADDY_URL)
+        caddy.push(current_config(), CADDY_URL)
         return None
     except RuntimeError as e:
         return str(e)
@@ -74,6 +80,19 @@ app.add_middleware(
 )
 
 
+class PortIn(BaseModel):
+    """Extra port, forwarded 1:1: public port N goes to port N of the upstream host."""
+    port: int
+    tls: bool = False
+
+    @field_validator("port")
+    @classmethod
+    def _port(cls, v: int) -> int:
+        if not 1 <= v <= 65535 or v in RESERVED_PORTS:
+            raise ValueError(f"Port {v} is not allowed (80, 443, 2019 and {ADMIN_PORT} are reserved)")
+        return v
+
+
 class RouteIn(BaseModel):
     domain: str
     upstream: str
@@ -81,6 +100,16 @@ class RouteIn(BaseModel):
     tls_mode: str = "auto"
     enabled: bool = True
     note: str = ""
+    ports: list[PortIn] = []
+
+    @field_validator("ports")
+    @classmethod
+    def _unique_ports(cls, v: list[PortIn]) -> list[PortIn]:
+        if len({p.port for p in v}) != len(v):
+            raise ValueError("Duplicate port")
+        if len(v) > 20:
+            raise ValueError("At most 20 extra ports per route")
+        return v
 
     @field_validator("domain")
     @classmethod
@@ -248,7 +277,7 @@ def tls_ask(request: Request, domain: str = ""):
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])
 def generated_config():
-    return caddy.build_config(store.list(), ADMIN_DOMAIN, ACME_EMAIL)
+    return current_config()
 
 
 @app.get("/api/system", dependencies=[Depends(require_auth)])

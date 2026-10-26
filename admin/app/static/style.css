@@ -90,3 +90,10 @@ svg.chart .ax { fill: var(--muted); font-size: 11px; }
 .stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; margin-bottom: 14px; background: var(--bg); }
 .legend-row { display: flex; align-items: center; font-size: 13px; padding: 4px 0; }
 .legend-row span { flex: 1; }
+
+.ports { margin-top: 4px; }
+.ports-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
+.ports .hint { margin: 0 0 8px; }
+.port-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.port-row input[type=number] { width: 110px; }
+.port-row label.check { margin: 0; }
