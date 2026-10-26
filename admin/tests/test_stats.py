@@ -197,3 +197,22 @@ def test_the_server_itself_is_never_a_client(tmp_path):
     data = stats.build_dashboard(store, "24h", system_hosts=frozenset({"panel.example.com"}))
     assert {c["ip"] for c in data["clients"]} == {"8.8.4.4"}
     assert stats.is_loopback("127.0.0.1") and stats.is_loopback("::1") and not stats.is_loopback("192.168.1.1")
+
+
+def test_browser_cancelled_requests_are_not_errors(client_with_store):
+    client, store = client_with_store
+    client.post("/api/routes", json={"domain": "a.example.com", "upstream": "1.2.3.4"})
+    store.add_hits([
+        stats.parse_line(line(host="a.example.com", status=200, ip="192.168.1.5")),
+        stats.parse_line(line(host="a.example.com", status=499, ip="192.168.1.5")),
+        stats.parse_line(line(host="a.example.com", status=499, ip="192.168.1.5")),
+        stats.parse_line(line(host="a.example.com", status=404, ip="192.168.1.5")),
+    ])
+    d = client.get("/api/stats?range=24h").json()
+    t = d["totals"]
+    assert t["requests"] == 4 and t["s2"] == 1 and t["s4"] == 1  # the two 499s are only requests
+    assert abs(t["error_rate"] - 0.25) < 1e-9
+    host = {h["host"]: h for h in d["hosts"]}["a.example.com"]
+    assert host["requests"] == 4 and host["errors"] == 1
+    row = d["clients"][0]
+    assert row["requests"] == 4 and row["errors"] == 1

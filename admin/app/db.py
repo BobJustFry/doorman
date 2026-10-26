@@ -115,14 +115,17 @@ class Store:
             return
         with _lock:
             for h in hits:
-                col = f"s{min(max(h['status'] // 100, 2), 5)}"
+                # 499 = the browser cancelled the request itself: counted as a request, never as an error
+                cancelled = h["status"] == 499
+                col = None if cancelled else f"s{min(max(h['status'] // 100, 2), 5)}"
+                add_c, add_v, add_u = (f", {col}", ",1", f", {col}={col}+1") if col else ("", "", "")
                 for table, key, step in (("hits_hourly", "hour", 3600), ("hits_minute", "minute", 60)):
                     self.conn.execute(
-                        f"INSERT INTO {table} (host, {key}, n, {col}, bytes) VALUES (?,?,1,1,?)"
-                        f" ON CONFLICT(host, {key}) DO UPDATE SET n=n+1, {col}={col}+1, bytes=bytes+?",
+                        f"INSERT INTO {table} (host, {key}, n{add_c}, bytes) VALUES (?,?,1{add_v},?)"
+                        f" ON CONFLICT(host, {key}) DO UPDATE SET n=n+1{add_u}, bytes=bytes+?",
                         (h["host"], int(h["ts"] // step * step), h["size"], h["size"]),
                     )
-                err = 1 if h["status"] >= 400 else 0
+                err = 1 if h["status"] >= 400 and not cancelled else 0
                 probe, stub = int(bool(h.get("probe"))), int(bool(h.get("stub")))
                 if h.get("ip"):
                     for table, key, step in (("clients_hourly", "hour", 3600), ("clients_minute", "minute", 60)):

@@ -319,6 +319,9 @@ function drawResponses(d) {
   if (!t.requests) { box.append(el('p', 'No traffic in this period yet.', 'muted')); return; }
   const parts = [['2xx success', t.s2, COLORS.ok], ['3xx redirects', t.s3, COLORS.r3],
     ['4xx client errors', t.s4, COLORS.c4], ['5xx server errors', t.s5, COLORS.c5]];
+  // requests the browser cancelled itself (499) are counted as requests but are not errors
+  const cancelled = t.requests - (t.s2 + t.s3 + t.s4 + t.s5);
+  if (cancelled > 0) parts.push(['cancelled by the browser', cancelled, 'var(--muted)']);
   const stack = el('div', undefined, 'stack');
   for (const [, n, c] of parts) {
     if (!n) continue;
