@@ -1,4 +1,5 @@
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -8,14 +9,15 @@ import time
 import urllib.request
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator, model_validator
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import caddy, security, stats
+from . import bans, caddy, security, stats
 from .common import DOMAIN_RE
 from .db import Store
 
@@ -30,6 +32,12 @@ RESERVED_PORTS = {80, 443, 2019, ADMIN_PORT}  # standard ports, Caddy's admin AP
 STATIC = Path(__file__).parent / "static"
 
 UPSTREAM_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$")
+UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+MAX_BODY = 64 * 1024
+WEAK_PASSWORDS = {"change-me-to-something-long", "changeme", "password", "admin", "administrator", "12345678"}
+MIN_PASSWORD_LENGTH = 12
+CSP = ("default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+       "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
 
 
 def _secret_key() -> str:
@@ -41,8 +49,34 @@ def _secret_key() -> str:
     return f.read_text().strip()
 
 
+def check_password(password: str) -> None:
+    """The panel can open ports and reroute traffic: refuse to start with a guessable password."""
+    if not password:
+        raise RuntimeError("ADMIN_PASSWORD is not set")
+    if len(password) < MIN_PASSWORD_LENGTH or password.lower() in WEAK_PASSWORDS:
+        raise RuntimeError(f"ADMIN_PASSWORD is too weak: use at least {MIN_PASSWORD_LENGTH} characters "
+                           "and not a well-known word")
+
+
 store = Store(DATA_DIR / "doorman.db")
 _fails: dict[str, list[float]] = {}
+
+
+def client_ip(request: Request) -> str:
+    """The address of the caller. X-Forwarded-For is believed only when it comes from Caddy on
+    this very host (loopback); from anywhere else it is attacker-controlled and ignored."""
+    peer = request.client.host if request.client else ""
+    try:
+        from_proxy = ipaddress.ip_address(peer).is_loopback
+    except ValueError:
+        from_proxy = False
+    if from_proxy:
+        first = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+        try:
+            return str(ipaddress.ip_address(first))
+        except ValueError:
+            pass
+    return peer
 
 
 def current_config() -> dict:
@@ -70,8 +104,7 @@ def apply_config() -> str | None:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    if not ADMIN_PASSWORD:
-        raise RuntimeError("ADMIN_PASSWORD is not set")
+    check_password(ADMIN_PASSWORD)
     for _attempt in range(15):  # Caddy may still be starting
         if apply_config() is None:
             break
@@ -92,6 +125,55 @@ app.add_middleware(
 )
 
 
+def _host_allowed(host_header: str) -> bool:
+    """Blocks DNS-rebinding: a web page cannot reach the panel through a name it controls.
+    Allowed: localhost, the configured admin domain and plain IP addresses."""
+    try:
+        hostname = (urlsplit("//" + host_header).hostname or "").lower()
+    except ValueError:
+        return False
+    if not hostname:
+        return False
+    if hostname == "localhost" or (ADMIN_DOMAIN and hostname == ADMIN_DOMAIN):
+        return True
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def guard(request: Request, call_next):
+    host = request.headers.get("host", "")
+    if not _host_allowed(host):
+        return PlainTextResponse("Bad host", status_code=400)
+    if request.method in UNSAFE_METHODS:
+        origin = request.headers.get("origin")
+        if origin and urlsplit(origin).netloc.lower() != host.lower():
+            return JSONResponse({"detail": "Cross-origin request refused"}, status_code=403)
+        if request.headers.get("sec-fetch-site") == "cross-site":
+            return JSONResponse({"detail": "Cross-site request refused"}, status_code=403)
+        length = request.headers.get("content-length", "")
+        if length.isdigit() and int(length) > MAX_BODY:
+            return JSONResponse({"detail": "Request too large"}, status_code=413)
+    response = await call_next(request)
+    h = response.headers
+    h["Content-Security-Policy"] = CSP
+    h["X-Frame-Options"] = "DENY"
+    h["X-Content-Type-Options"] = "nosniff"
+    h["Referrer-Policy"] = "no-referrer"
+    h["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    h["Cross-Origin-Opener-Policy"] = "same-origin"
+    if not request.url.path.startswith("/static/"):
+        h["Cache-Control"] = "no-store"
+    if request.url.scheme == "https":
+        h["Strict-Transport-Security"] = "max-age=31536000"
+    if "server" in h:
+        del h["server"]
+    return response
+
+
 class PortIn(BaseModel):
     """Extra port, forwarded 1:1: public port N goes to port N of the upstream host."""
     port: int
@@ -100,8 +182,8 @@ class PortIn(BaseModel):
     @field_validator("port")
     @classmethod
     def _port(cls, v: int) -> int:
-        if not 1 <= v <= 65535 or v in RESERVED_PORTS:
-            raise ValueError(f"Port {v} is not allowed (80, 443, 2019 and {ADMIN_PORT} are reserved)")
+        if not 1024 <= v <= 65535 or v in RESERVED_PORTS:
+            raise ValueError(f"Port {v} is not allowed: use 1024-65535 (2019 and {ADMIN_PORT} are reserved)")
         return v
 
 
@@ -174,20 +256,34 @@ def login_page():
     return FileResponse(STATIC / "login.html")
 
 
+def _prune_fails(now: float) -> None:
+    if len(_fails) > 5000:  # bound the memory a flood of source addresses can use
+        for k in [k for k, v in _fails.items() if not v or now - v[-1] > 300]:
+            del _fails[k]
+
+
 @app.post("/login")
 async def login(request: Request):
-    ip = request.headers.get("x-forwarded-for", request.client.host).split(",")[0].strip()
+    ip = client_ip(request)
     now = time.time()
+    _prune_fails(now)
     recent = [t for t in _fails.get(ip, []) if now - t < 300]
     if len(recent) >= 5:
         return JSONResponse({"detail": "Too many attempts, try again later"}, status_code=429)
-    body = await request.json()
-    ok = hmac.compare_digest(str(body.get("password", "")).encode(), ADMIN_PASSWORD.encode())
-    if not ok:
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    password = body.get("password") if isinstance(body, dict) else None
+    if not isinstance(password, str) or len(password) > 1024:
+        return JSONResponse({"detail": "Bad request"}, status_code=400)
+    if not hmac.compare_digest(password.encode(), ADMIN_PASSWORD.encode()):
         security.emit("auth", ip)
+        store.add_evidence(ip, "auth")
         _fails[ip] = recent + [now]
         return JSONResponse({"detail": "Wrong password"}, status_code=401)
     _fails.pop(ip, None)
+    request.session.clear()
     request.session["auth"] = True
     return {"ok": True}
 
@@ -262,11 +358,28 @@ def status():
     return {r["id"]: _reachable(r["upstream"]) for r in store.list() if r["enabled"]}
 
 
+def _known_hosts() -> set[str]:
+    return {r["domain"] for r in store.list()} | ({ADMIN_DOMAIN} - {""})
+
+
 @app.get("/api/stats", dependencies=[Depends(require_auth)])
 def get_stats(range: str = "24h"):
     if range not in stats.RANGES:
         raise HTTPException(422, "range must be one of " + ", ".join(stats.RANGES))
     return stats.build_dashboard(store, range, system_hosts=frozenset({ADMIN_DOMAIN} - {""}))
+
+
+class ResetIn(BaseModel):
+    scope: str
+
+
+@app.post("/api/stats/reset", dependencies=[Depends(require_auth)])
+def reset_stats(body: ResetIn):
+    """counters = all numbers, lists = unrouted and dismissed names, all = both."""
+    if body.scope not in ("counters", "lists", "all"):
+        raise HTTPException(422, "scope must be counters, lists or all")
+    store.reset(body.scope)
+    return {"ok": True, "scope": body.scope}
 
 
 class HostIn(BaseModel):
@@ -277,6 +390,53 @@ class HostIn(BaseModel):
 def dismiss_unknown(body: HostIn):
     store.ignore(body.host.strip().lower())
     return {"ok": True}
+
+
+def _valid_ip(ip: str) -> str:
+    try:
+        return str(ipaddress.ip_address(ip.strip()))
+    except ValueError:
+        raise HTTPException(422, "Not an IP address")
+
+
+@app.get("/api/ip", dependencies=[Depends(require_auth)])
+def ip_details(ip: str):
+    """The conclusion about one client address and whether it is blocked."""
+    ip = _valid_ip(ip)
+    out = stats.explain_ip(store, ip, _known_hosts())
+    out["ban"] = bans.state_for(ip)
+    return out
+
+
+class BanIn(BaseModel):
+    ip: str
+    note: str = ""
+
+
+@app.get("/api/bans", dependencies=[Depends(require_auth)])
+def list_bans():
+    st = bans.status()
+    return {"helper_alive": st["helper_alive"],
+            "manual": [{**b, **bans.state_for(b["ip"])} for b in bans.desired()],
+            "jails": {j: ips for j, ips in st["jails"].items() if ips}}
+
+
+@app.post("/api/bans", dependencies=[Depends(require_auth)])
+def ban_ip(body: BanIn):
+    try:
+        bans.add(body.ip, body.note)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return bans.state_for(_valid_ip(body.ip))
+
+
+@app.delete("/api/bans", dependencies=[Depends(require_auth)])
+def unban_ip(ip: str):
+    try:
+        bans.remove(ip)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    return bans.state_for(_valid_ip(ip))
 
 
 @app.get("/internal/ask")
@@ -295,7 +455,7 @@ def tls_ask(request: Request, domain: str = ""):
     domain = domain.strip().lower()
     if not DOMAIN_RE.match(domain):
         return JSONResponse({"allowed": False}, status_code=403)
-    known = {r["domain"] for r in store.list()} | ({ADMIN_DOMAIN} - {""})
+    known = _known_hosts()
     if domain in known or domain == caddy.FALLBACK_NAME:  # the stub's own certificate name
         return JSONResponse({"allowed": True})
     zones = {d.split(".", 1)[1] for d in known if d.count(".") >= 2}
@@ -324,6 +484,7 @@ def system():
         "routes_enabled": sum(1 for r in routes if r["enabled"]),
         "admin_domain": ADMIN_DOMAIN,
         "acme_email": ACME_EMAIL,
+        "ban_helper": bans.status()["helper_alive"],
     }
 
 

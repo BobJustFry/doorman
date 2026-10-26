@@ -19,8 +19,6 @@
 </header>
 
 <main>
-  <div id="banner" class="banner" hidden></div>
-
   <section id="tab-routes" hidden>
     <div class="bar">
       <input id="search" type="search" placeholder="Search domain or IP…">
@@ -43,6 +41,8 @@
         <button data-range="7d">7 days</button>
         <button data-range="30d">30 days</button>
       </div>
+      <span class="grow"></span>
+      <button class="ghost" id="reset-open">Reset…</button>
     </div>
 
     <div class="kpis" id="kpis"></div>
@@ -107,6 +107,20 @@
       <div class="item"><span>Admin domain</span><b id="sys-admin">…</b></div>
       <div class="item"><span>Let's Encrypt e-mail</span><b id="sys-acme">…</b></div>
     </div>
+    <div class="card panel">
+      <div class="panel-head">
+        <h3>Blocked addresses</h3>
+        <span class="muted" id="bans-helper"></span>
+      </div>
+      <p class="muted hint">Addresses blocked by fail2ban on the server (all ports). Manual blocks last 30 days.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>IP address</th><th>Blocked by</th><th></th></tr></thead>
+          <tbody id="bans-rows"></tbody>
+        </table>
+      </div>
+      <p id="bans-empty" class="muted pad" hidden>Nobody is blocked right now.</p>
+    </div>
     <div class="bar end">
       <button class="ghost" id="show-config">View generated config</button>
       <button id="reapply">Re-apply config</button>
@@ -144,6 +158,61 @@
       <button type="submit" id="submit">Save</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="confirm-dlg">
+  <h2 id="confirm-title">Are you sure?</h2>
+  <p id="confirm-text" class="dlg-text"></p>
+  <div class="actions">
+    <button type="button" class="ghost" id="confirm-no">Cancel</button>
+    <button type="button" id="confirm-yes">Confirm</button>
+  </div>
+</dialog>
+
+<dialog id="notice-dlg">
+  <h2 id="notice-title">Notice</h2>
+  <div id="notice-text" class="dlg-text"></div>
+  <div class="actions"><button type="button" id="notice-ok">OK</button></div>
+</dialog>
+
+<dialog id="reset-dlg">
+  <h2>Reset statistics</h2>
+  <p class="muted">Routes, certificates and blocked addresses are never touched.</p>
+  <div class="choices">
+    <label class="choice"><input type="radio" name="scope" value="counters" checked>
+      <span><b>Counters</b><small>Requests, errors, traffic, charts, the Clients table and the evidence behind scanner verdicts.</small></span></label>
+    <label class="choice"><input type="radio" name="scope" value="lists">
+      <span><b>Lists</b><small>The “Unrouted domains” list and the names you dismissed (they may reappear if they ask again).</small></span></label>
+    <label class="choice"><input type="radio" name="scope" value="all">
+      <span><b>Everything</b><small>Counters and lists.</small></span></label>
+  </div>
+  <div class="actions">
+    <button type="button" class="ghost" id="reset-cancel">Cancel</button>
+    <button type="button" class="danger-solid" id="reset-go">Continue…</button>
+  </div>
+</dialog>
+
+<dialog id="ip-dlg">
+  <div class="ip-head">
+    <h2 id="ip-title"></h2>
+    <span id="ip-badges"></span>
+  </div>
+  <p id="ip-summary" class="muted"></p>
+  <h4>Why this conclusion</h4>
+  <ul id="ip-reasons" class="reasons"></ul>
+  <h4>What it requested</h4>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Domain</th><th>Requests</th><th>Errors</th></tr></thead>
+      <tbody id="ip-domains"></tbody>
+    </table>
+  </div>
+  <p id="ip-ban-line" class="ban-line"></p>
+  <div class="actions">
+    <button type="button" class="ghost" id="ip-close">Close</button>
+    <button type="button" class="danger-solid" id="ip-ban" hidden>Block with fail2ban…</button>
+    <button type="button" id="ip-unban" hidden>Unblock…</button>
+  </div>
 </dialog>
 
 <dialog id="config-dlg">

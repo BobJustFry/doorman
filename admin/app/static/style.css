@@ -109,3 +109,26 @@ svg.chart .ax { fill: var(--muted); font-size: 11px; }
 .port-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .port-row input[type=number] { width: 110px; }
 .port-row label.check { margin: 0; }
+
+/* dialogs: confirmations, notices, reset, address conclusion */
+.dlg-text { white-space: pre-line; margin: 0 0 16px; color: var(--fg); }
+#confirm-dlg, #notice-dlg, #reset-dlg { width: min(460px, calc(100vw - 32px)); }
+#ip-dlg { width: min(620px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; }
+.danger-solid { background: var(--bad); }
+.choices { display: grid; gap: 8px; margin: 12px 0 16px; }
+.choice { display: flex !important; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line);
+  border-radius: 10px; cursor: pointer; margin: 0 !important; color: var(--fg) !important; font-size: 14px !important; }
+.choice input { margin-top: 4px; }
+.choice small { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; }
+.choice:has(input:checked) { border-color: var(--accent); }
+.ip-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.ip-head h2 { margin: 0; }
+#ip-dlg h4 { margin: 14px 0 6px; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.reasons { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.ban-line { margin: 12px 0; padding: 8px 12px; border-radius: 8px; background: var(--bg); font-size: 14px; }
+.ban-line:empty { display: none; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font: inherit; text-align: left; }
+button.link:hover { text-decoration: underline; }
+.badge.dark { background: #20232b; color: #fff; border-color: #20232b; }
+button.link-chip { cursor: pointer; font: inherit; font-size: 12px; color: var(--fg); }
+button.link-chip:hover { text-decoration: underline; }

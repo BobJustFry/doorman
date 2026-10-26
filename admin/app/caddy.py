@@ -14,6 +14,25 @@ FALLBACK_NAME = "doorman.local"
 PRIVATE_RANGES = ["127.0.0.0/8", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7", "::1/128"]
 
 
+def _hide_server_route() -> dict:
+    return {"handle": [{"handler": "headers", "response": {"delete": ["Server"], "deferred": True}}]}
+
+
+def _https_redirect_route() -> dict:
+    """Plain HTTP never serves content: it is redirected to the same URL over HTTPS (308 keeps
+    the method). ACME HTTP-01 challenges are answered by Caddy before routes are consulted."""
+    return {
+        "match": [{"protocol": "http"}],
+        "handle": [{"handler": "static_response", "status_code": 308,
+                    "headers": {"Location": ["https://{http.request.host}{http.request.uri}"]}}],
+        "terminal": True,
+    }
+
+
+# Slow-client protection (slowloris) without limiting uploads, downloads or websockets.
+_SERVER_LIMITS = {"read_header_timeout": "10s", "idle_timeout": "2m", "max_header_bytes": 65536}
+
+
 def _stub_route() -> dict:
     return {"handle": [{
         "handler": "static_response",
@@ -44,7 +63,11 @@ def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) 
         "upstreams": [{"dial": upstream}],
         # Caddy would otherwise send the upstream's own address as Host, and name-based
         # virtual hosts (nginx, Apache, ...) would answer for the wrong site.
-        "headers": {"request": {"set": {"Host": ["{http.request.host}"]}}},
+        "headers": {
+            "request": {"set": {"Host": ["{http.request.host}"]}},
+            # do not advertise the upstream's software and version to the internet
+            "response": {"delete": ["Server", "X-Powered-By"]},
+        },
     }
     if tls:
         # SNI carries the public name too, so the upstream picks the right certificate/site.
@@ -85,17 +108,19 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
     servers: dict = {
         "doorman": {
             "listen": [":80", ":443"],
-            "routes": http_routes + [_stub_route()],
+            "routes": [_hide_server_route(), _https_redirect_route()] + http_routes + [_stub_route()],
             "errors": _upstream_error_routes(),
             "logs": {"default_logger_name": "doorman"},
             "tls_connection_policies": _FALLBACK_TLS,
+            **_SERVER_LIMITS,
         }
     }
     for port, port_routes in sorted(extra.items()):
         servers[f"port_{port}"] = {
             "listen": [f":{port}"],
-            "routes": port_routes + [_stub_route()],
+            "routes": [_hide_server_route()] + port_routes + [_stub_route()],
             "errors": _upstream_error_routes(),
+            **_SERVER_LIMITS,
             "logs": {"default_logger_name": "doorman"},
             "automatic_https": {"disable_redirects": True},
             "tls_connection_policies": _FALLBACK_TLS,
@@ -116,7 +141,12 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
                 },
             }
         },
-        "apps": {"http": {"servers": servers}},
+        "apps": {
+            "http": {"servers": servers},
+            # Caddy would try to add its private CA to the container's trust store: not needed here
+            # and it would require write access the container does not have.
+            "pki": {"certificate_authorities": {"local": {"install_trust": False}}},
+        },
     }
 
     public_hosts = [h for h in all_hosts if h not in internal_hosts]

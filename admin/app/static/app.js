@@ -19,10 +19,45 @@ async function api(method, url, body) {
   return data;
 }
 
-function banner(msg) {
-  const b = $('#banner');
-  b.hidden = !msg;
-  b.textContent = msg || '';
+let bannedIps = new Set();
+let lastNotice = {msg: '', at: 0};
+
+/* Messages are dialogs, never inline banners or the browser's alert(). The same message
+   coming back from a background refresh is not shown again for half a minute. */
+function showNotice(message, title, force) {
+  const now = Date.now();
+  if (!force && message === lastNotice.msg && now - lastNotice.at < 30000) return;
+  lastNotice = {msg: message, at: now};
+  const dlg = $('#notice-dlg');
+  const box = $('#notice-text');
+  if (dlg.open) {
+    box.textContent += '\n' + message;
+    return;
+  }
+  $('#notice-title').textContent = title || 'Something went wrong';
+  box.textContent = message;
+  dlg.showModal();
+}
+
+function banner(msg) { if (msg) showNotice(msg); }
+const notify = (message, title) => showNotice(message, title, true);
+$('#notice-ok').onclick = () => $('#notice-dlg').close();
+
+/* Resolves true after "Confirm", false after "Cancel" or Esc. */
+function askConfirm({title, text, yes = 'Confirm', danger = false}) {
+  return new Promise((resolve) => {
+    const dlg = $('#confirm-dlg');
+    $('#confirm-title').textContent = title;
+    $('#confirm-text').textContent = text;
+    const ok = $('#confirm-yes');
+    ok.textContent = yes;
+    ok.className = danger ? 'danger-solid' : '';
+    let answer = false;
+    dlg.addEventListener('close', () => resolve(answer), {once: true});
+    ok.onclick = () => { answer = true; dlg.close(); };
+    $('#confirm-no').onclick = () => dlg.close();
+    dlg.showModal();
+  });
 }
 
 function el(tag, text, cls) {
@@ -138,7 +173,12 @@ async function save(id, data) {
 }
 
 async function remove(r) {
-  if (!confirm('Delete ' + r.domain + '?')) return;
+  const yes = await askConfirm({
+    title: 'Delete ' + r.domain + '?',
+    text: 'The route is removed and the domain starts showing the “nobody’s home” page.\nThe service itself is not touched.',
+    yes: 'Delete', danger: true,
+  });
+  if (!yes) return;
   try {
     reportApply(await api('DELETE', '/api/routes/' + r.id));
     routesLoaded = false;
@@ -372,8 +412,9 @@ function unknownRow(u) {
   verdictTd.append(verdictBadge(u.verdict));
   const whoTd = el('td');
   for (const s of u.sources || []) {
-    const chip = el('span', s.ip + ' · ' + s.requests.toLocaleString(), 'chip ' + (s.lan ? 'lan' : 'wan'));
-    chip.title = (s.lan ? 'Local network' : 'Internet') + (s.probes ? ', asked for scanner-only paths' : '');
+    const chip = el('button', s.ip + ' · ' + s.requests.toLocaleString(), 'chip link-chip ' + (s.lan ? 'lan' : 'wan'));
+    chip.title = (s.lan ? 'Local network' : 'Internet') + (s.probes ? ', asked for scanner-only paths' : '') + ': click for details';
+    chip.onclick = () => openIp(s.ip);
     whoTd.append(chip);
   }
   if (u.source_count > (u.sources || []).length) whoTd.append(el('span', '+' + (u.source_count - u.sources.length), 'chip'));
@@ -444,7 +485,17 @@ function drawClients() {
       b.title = c.stubs + ' requests for names that do not exist';
       flagTd.append(b);
     }
-    tr.append(el('td', c.ip), netTd, domTd, el('td', c.requests.toLocaleString()), errTd, flagTd);
+    if (bannedIps.has(c.ip)) {
+      const b = el('span', 'Blocked', 'badge dark');
+      b.title = 'Blocked by fail2ban on the server';
+      flagTd.append(b);
+    }
+    const ipTd = el('td');
+    const ipBtn = el('button', c.ip, 'link');
+    ipBtn.title = 'Why is it listed? Click for the conclusion';
+    ipBtn.onclick = () => openIp(c.ip);
+    ipTd.append(ipBtn);
+    tr.append(ipTd, netTd, domTd, el('td', c.requests.toLocaleString()), errTd, flagTd);
     return tr;
   }));
 }
@@ -454,6 +505,7 @@ async function loadStats() {
   try {
     const d = await api('GET', '/api/stats?range=' + statsRange);
     const t = d.totals;
+    await refreshBans();
     renderIf('kpis', t, () => $('#kpis').replaceChildren(
       kpi('Requests', fmtNum(t.requests), t.last5 + ' in the last 5 min'),
       kpi('Traffic', fmtBytes(t.bytes), 'sent to clients'),
@@ -472,7 +524,7 @@ async function loadStats() {
       $('#unknown-empty').hidden = d.unknown.length > 0;
       $('#unknown-rows').replaceChildren(...d.unknown.map(unknownRow));
     });
-    renderIf('clients', d.clients, () => { lastClients = d.clients; drawClients(); });
+    renderIf('clients', [d.clients, [...bannedIps]], () => { lastClients = d.clients; drawClients(); });
   } catch (e) { banner(e.message); }
 }
 
@@ -494,6 +546,7 @@ async function loadSystem() {
     $('#sys-routes').textContent = s.routes_enabled + ' active / ' + s.routes_total + ' total';
     $('#sys-admin').textContent = s.admin_domain || 'not set (localhost only)';
     $('#sys-acme').textContent = s.acme_email || 'not set';
+    loadBans();
   } catch (e) { banner(e.message); }
 }
 
@@ -506,6 +559,143 @@ $('#show-config').onclick = async () => {
 };
 $('#config-close').onclick = () => $('#config-dlg').close();
 $('#logout').onclick = async () => { await api('POST', '/logout'); location.href = '/login'; };
+
+/* ---------- blocked addresses (fail2ban) ---------- */
+async function refreshBans() {
+  try {
+    const d = await api('GET', '/api/bans');
+    bannedIps = new Set([...Object.values(d.jails).flat(), ...d.manual.filter((m) => m.state !== 'none').map((m) => m.ip)]);
+    return d;
+  } catch (_) { return null; }
+}
+
+async function loadBans() {
+  const d = await refreshBans();
+  if (!d) return;
+  $('#bans-helper').textContent = d.helper_alive ? 'host helper: active' : 'host helper: not installed (see README)';
+  const rows = new Map();
+  for (const [jail, ips] of Object.entries(d.jails)) for (const ip of ips) (rows.get(ip) || rows.set(ip, []).get(ip)).push(jail);
+  for (const m of d.manual) if (!rows.has(m.ip)) rows.set(m.ip, ['waiting for the helper']);
+  $('#bans-empty').hidden = rows.size > 0;
+  $('#bans-rows').replaceChildren(...[...rows].map(([ip, jails]) => {
+    const tr = el('tr');
+    const ipTd = el('td');
+    const open = el('button', ip, 'link');
+    open.onclick = () => openIp(ip);
+    ipTd.append(open);
+    const act = el('td', undefined, 'actions');
+    act.append(btn('Unblock…', 'ghost icon', () => unblock(ip)));
+    tr.append(ipTd, el('td', jails.join(', ')), act);
+    return tr;
+  }));
+}
+
+async function unblock(ip) {
+  const yes = await askConfirm({
+    title: 'Unblock ' + ip + '?',
+    text: 'The address will be able to reach your services again. If it keeps misbehaving it will be blocked again automatically.',
+    yes: 'Unblock',
+  });
+  if (!yes) return;
+  try {
+    await api('DELETE', '/api/bans?ip=' + encodeURIComponent(ip));
+    notify('The request was sent. The host helper removes the block within a few seconds.', 'Unblocking ' + ip);
+    setTimeout(() => { loadBans(); loadStats(); }, 4000);
+  } catch (e) { banner(e.message); }
+}
+
+/* ---------- the conclusion about one address ---------- */
+const ipDlg = $('#ip-dlg');
+let ipCurrent = null;
+
+const LEVELS = {
+  scanner: ['Scanner', 'bad'], suspicious: ['Suspicious', 'warn'], clean: ['No suspicious activity', 'ok'],
+};
+
+async function openIp(ip) {
+  try {
+    renderIp(await api('GET', '/api/ip?ip=' + encodeURIComponent(ip)));
+    if (!ipDlg.open) ipDlg.showModal();
+  } catch (e) { banner(e.message); }
+}
+
+function renderIp(d) {
+  ipCurrent = d;
+  $('#ip-title').textContent = d.ip;
+  const [label, cls] = LEVELS[d.level] || LEVELS.clean;
+  const badges = $('#ip-badges');
+  badges.replaceChildren(el('span', d.lan ? 'LAN' : 'Internet', 'badge ' + (d.lan ? 'lan' : 'wan')), ' ', el('span', label, 'badge ' + cls));
+  $('#ip-summary').textContent = d.requests.toLocaleString() + ' request(s), ' + d.errors.toLocaleString() + ' error(s) in the last 31 days.';
+  $('#ip-reasons').replaceChildren(...d.reasons.map((r) => el('li', r)));
+  $('#ip-domains').replaceChildren(...d.domains.map((x) => {
+    const tr = el('tr');
+    const dom = el('td', x.host);
+    if (!x.routed) dom.append(el('div', 'no route here', 'muted'));
+    tr.append(dom, el('td', x.requests.toLocaleString()), el('td', x.errors ? x.errors.toLocaleString() : '–'));
+    return tr;
+  }));
+  const b = d.ban;
+  let line = '';
+  if (b.state === 'banned') line = 'Blocked by fail2ban (' + b.jails.join(', ') + ').';
+  else if (b.state === 'queued') {
+    line = 'Block requested: the helper on the server applies it within a few seconds.';
+    if (!b.helper_alive) line += ' The helper is not answering: install it with “sudo bash deploy/install-fail2ban.sh”.';
+  } else if (!d.can_ban) line = 'Addresses of your own network cannot be blocked from here.';
+  $('#ip-ban-line').textContent = line;
+  $('#ip-ban').hidden = !(d.can_ban && b.state === 'none');
+  $('#ip-unban').hidden = b.state === 'none';
+}
+
+$('#ip-close').onclick = () => ipDlg.close();
+
+$('#ip-ban').onclick = async () => {
+  const d = ipCurrent;
+  const why = d.level === 'clean' ? 'Nothing hostile was recorded for it.' : d.reasons.join('\n');
+  const yes = await askConfirm({
+    title: 'Block ' + d.ip + '?',
+    text: 'It will be blocked on every port of the server for 30 days (fail2ban + firewall). It will not reach any of your services or this panel.\n\n' + why,
+    yes: 'Block', danger: true,
+  });
+  if (!yes) return;
+  try {
+    await api('POST', '/api/bans', {ip: d.ip, note: 'from the dashboard'});
+    await openIp(d.ip);
+    setTimeout(() => { if (ipDlg.open && ipCurrent && ipCurrent.ip === d.ip) openIp(d.ip); loadStats(); }, 4000);
+  } catch (e) { banner(e.message); }
+};
+
+$('#ip-unban').onclick = async () => {
+  const ip = ipCurrent.ip;
+  await unblock(ip);
+  if (ipDlg.open) setTimeout(() => { if (ipDlg.open && ipCurrent && ipCurrent.ip === ip) openIp(ip); }, 4500);
+};
+
+/* ---------- reset statistics ---------- */
+const RESET_TEXT = {
+  counters: ['counters', 'All numbers go back to zero: requests, errors, traffic, charts, the Clients table and the evidence behind scanner verdicts.'],
+  lists: ['lists', 'The “Unrouted domains” list is emptied and the names you dismissed are forgotten.'],
+  all: ['counters and lists', 'All numbers go back to zero, the “Unrouted domains” list is emptied and dismissed names are forgotten.'],
+};
+
+$('#reset-open').onclick = () => $('#reset-dlg').showModal();
+$('#reset-cancel').onclick = () => $('#reset-dlg').close();
+$('#reset-go').onclick = async () => {
+  const scope = document.querySelector('#reset-dlg input[name=scope]:checked').value;
+  $('#reset-dlg').close();
+  const [name, text] = RESET_TEXT[scope];
+  const yes = await askConfirm({
+    title: 'Reset ' + name + '?',
+    text: text + '\n\nRoutes, certificates and blocked addresses are not touched. This cannot be undone.',
+    yes: 'Reset', danger: true,
+  });
+  if (!yes) return;
+  try {
+    await api('POST', '/api/stats/reset', {scope});
+    for (const k of Object.keys(rendered)) delete rendered[k];
+    await loadStats();
+    notify('Statistics were reset (' + name + ').', 'Done');
+  } catch (e) { banner(e.message); }
+};
 
 /* Only the dashboard is fetched on page load; other tabs load when opened. */
 loadStats();

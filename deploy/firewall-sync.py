@@ -21,7 +21,7 @@ def ufw(*args: str) -> str:
 def main(path: str) -> None:
     try:
         with open(path, encoding="utf-8") as f:
-            desired = {int(p) for p in json.load(f).get("tcp", []) if 1 <= int(p) <= 65535}
+            desired = {int(p) for p in json.load(f).get("tcp", []) if 1024 <= int(p) <= 65535}  # never privileged ports
     except FileNotFoundError:
         desired = set()
 

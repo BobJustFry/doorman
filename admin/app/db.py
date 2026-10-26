@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import sqlite3
 import threading
 import time
 from pathlib import Path
+
+from .common import DOMAIN_RE
 
 _lock = threading.Lock()
 
@@ -12,11 +15,30 @@ _COUNTERS = """n INTEGER NOT NULL DEFAULT 0, s2 INTEGER NOT NULL DEFAULT 0,
     s3 INTEGER NOT NULL DEFAULT 0, s4 INTEGER NOT NULL DEFAULT 0, s5 INTEGER NOT NULL DEFAULT 0,
     bytes INTEGER NOT NULL DEFAULT 0"""
 
+# Host names come straight from clients, so the number of distinct ones is capped:
+# a scanner sending random Host headers must not be able to grow the database forever.
+MAX_HOSTS = 1000
+MAX_CLIENT_ROWS = 200_000
+MAX_EVIDENCE_ROWS = 20_000
+OTHER_HOST = "(other)"
+RAW_IP_HOST = "(ip address)"
+
 
 def _route(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["ports"] = json.loads(d.get("ports") or "[]")
     return d
+
+
+def normalize_host(host: str) -> str:
+    """Valid domains are kept as they are; IP literals and junk are folded into buckets."""
+    if DOMAIN_RE.match(host):
+        return host
+    try:
+        ipaddress.ip_address(host.strip("[]"))
+        return RAW_IP_HOST
+    except ValueError:
+        return OTHER_HOST
 
 
 class Store:
@@ -49,6 +71,9 @@ class Store:
                     n INTEGER NOT NULL DEFAULT 0, err INTEGER NOT NULL DEFAULT 0,
                     probe INTEGER NOT NULL DEFAULT 0, stub INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (host, ip, minute));
+                CREATE TABLE IF NOT EXISTS evidence (
+                    ip TEXT NOT NULL, kind TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0,
+                    ts REAL NOT NULL, PRIMARY KEY (ip, kind));
                 CREATE TABLE IF NOT EXISTS seen (
                     host TEXT PRIMARY KEY, ts REAL NOT NULL, total INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT);
@@ -114,7 +139,18 @@ class Store:
         if not hits:
             return
         with _lock:
+            now = time.time()
+            known = {r[0] for r in self.conn.execute("SELECT domain FROM routes")}
+            seen_hosts = {r[0] for r in self.conn.execute("SELECT host FROM seen")}
+            client_rows = self.conn.execute("SELECT COUNT(*) FROM clients_hourly").fetchone()[0]
+            if client_rows > MAX_CLIENT_ROWS:  # make room: keep a week of detail
+                self.conn.execute("DELETE FROM clients_hourly WHERE hour < ?", (now - 7 * 86400,))
+                client_rows = self.conn.execute("SELECT COUNT(*) FROM clients_hourly").fetchone()[0]
             for h in hits:
+                host = normalize_host(h["host"])
+                if host not in known and host not in seen_hosts and len(seen_hosts) >= MAX_HOSTS:
+                    host = OTHER_HOST  # too many different unknown names: stop tracking new ones
+                seen_hosts.add(host)
                 # 499 = the browser cancelled the request itself: counted as a request, never as an error
                 cancelled = h["status"] == 499
                 col = None if cancelled else f"s{min(max(h['status'] // 100, 2), 5)}"
@@ -123,29 +159,65 @@ class Store:
                     self.conn.execute(
                         f"INSERT INTO {table} (host, {key}, n{add_c}, bytes) VALUES (?,?,1{add_v},?)"
                         f" ON CONFLICT(host, {key}) DO UPDATE SET n=n+1{add_u}, bytes=bytes+?",
-                        (h["host"], int(h["ts"] // step * step), h["size"], h["size"]),
+                        (host, int(h["ts"] // step * step), h["size"], h["size"]),
                     )
                 err = 1 if h["status"] >= 400 and not cancelled else 0
                 probe, stub = int(bool(h.get("probe"))), int(bool(h.get("stub")))
-                if h.get("ip"):
+                if h.get("ip") and client_rows <= MAX_CLIENT_ROWS:
                     for table, key, step in (("clients_hourly", "hour", 3600), ("clients_minute", "minute", 60)):
                         self.conn.execute(
                             f"INSERT INTO {table} (host, ip, {key}, n, err, probe, stub) VALUES (?,?,?,1,?,?,?)"
                             f" ON CONFLICT(host, ip, {key}) DO UPDATE SET n=n+1, err=err+?, probe=probe+?, stub=stub+?",
-                            (h["host"], h["ip"], int(h["ts"] // step * step), err, probe, stub, err, probe, stub),
+                            (host, h["ip"], int(h["ts"] // step * step), err, probe, stub, err, probe, stub),
                         )
+                if h.get("ip") and h.get("probe_kind"):
+                    self._evidence(h["ip"], h["probe_kind"], h["ts"])
+                if h.get("ip") and stub:
+                    self._evidence(h["ip"], "stub", h["ts"])
                 self.conn.execute(
                     "INSERT INTO seen (host, ts, total) VALUES (?,?,1)"
                     " ON CONFLICT(host) DO UPDATE SET ts=MAX(ts, excluded.ts), total=total+1",
-                    (h["host"], h["ts"]),
+                    (host, h["ts"]),
                 )
-            now = time.time()
             self.conn.execute("DELETE FROM hits_hourly WHERE hour < ?", (now - 31 * 86400,))
             self.conn.execute("DELETE FROM hits_minute WHERE minute < ?", (now - 3 * 3600,))
             self.conn.execute("DELETE FROM clients_hourly WHERE hour < ?", (now - 31 * 86400,))
             self.conn.execute("DELETE FROM clients_minute WHERE minute < ?", (now - 3 * 3600,))
             self.conn.execute("DELETE FROM seen WHERE ts < ?", (now - 90 * 86400,))
+            self.conn.execute("DELETE FROM evidence WHERE ts < ?", (now - 31 * 86400,))
             self.conn.commit()
+
+    def _evidence(self, ip: str, kind: str, ts: float) -> None:
+        """Why an address looks hostile: a count per kind of behaviour (caller holds the lock)."""
+        if self.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] >= MAX_EVIDENCE_ROWS:
+            self.conn.execute("DELETE FROM evidence WHERE ts < ?", (ts - 7 * 86400,))
+            if self.conn.execute("SELECT COUNT(*) FROM evidence").fetchone()[0] >= MAX_EVIDENCE_ROWS:
+                return
+        self.conn.execute(
+            "INSERT INTO evidence (ip, kind, n, ts) VALUES (?,?,1,?)"
+            " ON CONFLICT(ip, kind) DO UPDATE SET n=n+1, ts=MAX(ts, excluded.ts)",
+            (ip, kind, ts),
+        )
+
+    def add_evidence(self, ip: str, kind: str) -> None:
+        with _lock:
+            self._evidence(ip, kind, time.time())
+            self.conn.commit()
+
+    def evidence_for(self, ip: str) -> list[dict]:
+        with _lock:
+            rows = self.conn.execute(
+                "SELECT kind, n FROM evidence WHERE ip=? ORDER BY n DESC", (ip,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def client_hosts(self, ip: str, since: float) -> list[dict]:
+        with _lock:
+            rows = self.conn.execute(
+                "SELECT host, SUM(n) AS requests, SUM(err) AS errors, SUM(probe) AS probes, SUM(stub) AS stubs"
+                " FROM clients_hourly WHERE ip=? AND hour >= ? GROUP BY host ORDER BY requests DESC",
+                (ip, int(since // 3600 * 3600)),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def counters_since(self, table: str, since: float) -> list[dict]:
         key = {"hits_hourly": "hour", "hits_minute": "minute"}[table]
@@ -209,6 +281,27 @@ class Store:
         with _lock:
             rows = self.conn.execute("SELECT host FROM ignored").fetchall()
         return {r["host"] for r in rows}
+
+    # ---- reset -----------------------------------------------------------------
+
+    def reset(self, scope: str) -> None:
+        """counters: all numbers; lists: unrouted names and dismissed names; all: both.
+
+        The read position in Caddy's access log is kept, so old lines are never counted again."""
+        if scope not in ("counters", "lists", "all"):
+            raise ValueError(scope)
+        with _lock:
+            if scope in ("counters", "all"):
+                for table in ("hits_hourly", "hits_minute", "clients_hourly", "clients_minute", "evidence"):
+                    self.conn.execute(f"DELETE FROM {table}")
+                self.conn.execute("UPDATE seen SET total=0")
+            if scope in ("lists", "all"):
+                self.conn.execute("DELETE FROM unknown")
+                self.conn.execute("DELETE FROM ignored")
+                self.conn.execute("DELETE FROM seen WHERE host NOT IN (SELECT domain FROM routes)")
+            self.conn.commit()
+
+    # ---- misc -----------------------------------------------------------------
 
     def get_meta(self, key: str) -> str | None:
         with _lock:

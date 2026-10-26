@@ -13,6 +13,14 @@ services:
       - caddy_config:/config
       - caddy_logs:/var/log/caddy
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json", "--resume"]
+    # Least privilege: the proxy faces the internet, so it keeps only the right to bind ports
+    # 80/443, cannot gain more, and cannot write anywhere except its own volumes.
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    pids_limit: 512
 
   admin:
     build: ./admin
@@ -34,6 +42,12 @@ services:
       - admin_data:/data
       - caddy_logs:/logs:ro
     depends_on: [caddy]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    pids_limit: 256
+    mem_limit: 512m
 
 volumes:
   caddy_data:

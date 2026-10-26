@@ -14,7 +14,7 @@ def line(host="a.example.com", status=200, ts=None, uri="/x?token=secret", ip="1
 def test_parse_keeps_only_counter_fields():
     hit = stats.parse_line(line(host="A.example.com:443"))
     assert hit["host"] == "a.example.com"
-    assert set(hit) == {"ts", "host", "ip", "status", "size", "probe"}  # no path, query or method
+    assert set(hit) == {"ts", "host", "ip", "status", "size", "probe", "probe_kind"}  # no path, query or method
 
 
 def test_parse_garbage_is_ignored():
@@ -78,7 +78,7 @@ def test_unknown_domains_from_http_and_tls_attempts(client_with_store):
     store.add_hits([stats.parse_line(line(host="new.example.com")),
                     stats.parse_line(line(host="new.example.com")),
                     stats.parse_line(line(host="known.example.com")),
-                    stats.parse_line(line(host="192.168.12.24"))])  # bare IPs are noise
+                    stats.parse_line(line(host="10.0.0.24"))])  # bare IPs are noise
 
     # inside the zone of an existing route: allowed (and recorded)
     assert client.get("/internal/ask?domain=tls-only.example.com").status_code == 200

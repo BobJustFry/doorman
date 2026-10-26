@@ -14,14 +14,31 @@ from .db import Store
 
 log = logging.getLogger("doorman.stats")
 BATCH_LINES = 5000
-# Paths that only scanners ask for. Only a yes/no is kept, never the path itself.
-PROBE_RE = re.compile(r"^/(\.env|\.git|\.aws|\.ssh|phpmyadmin|cgi-bin|vendor/phpunit|boaform|actuator|\.DS_Store)", re.I)
+# Paths that only scanners ask for. Only the kind is kept (".env", ".git", ...), never the full
+# path or the query. The kind must be followed by a separator, so /.github or /.environment
+# are not matched, and nothing a monitoring system legitimately polls (e.g. /actuator) is listed.
+PROBE_RE = re.compile(
+    r"^/(\.env|\.git|\.aws|\.ssh|wp-config|phpmyadmin|cgi-bin|vendor/phpunit|boaform|\.DS_Store)(?=[/.?]|$)", re.I)
+
+PROBE_LABELS = {
+    ".env": "environment files (/.env) that hold passwords and keys",
+    ".git": "git repository data (/.git)",
+    ".aws": "cloud credentials (/.aws)",
+    ".ssh": "SSH keys (/.ssh)",
+    "wp-config": "WordPress configuration (/wp-config)",
+    "phpmyadmin": "the phpMyAdmin database panel",
+    "cgi-bin": "legacy CGI scripts (/cgi-bin)",
+    "vendor/phpunit": "a known PHPUnit remote-code-execution path",
+    "boaform": "router admin pages (/boaform)",
+    ".ds_store": "macOS metadata files (/.DS_Store)",
+}
 
 
 def parse_line(line: bytes) -> dict | None:
     try:
         e = json.loads(line)
         req = e["request"]
+        m = PROBE_RE.match(req.get("uri", ""))
         return {
             # only counters are derived: paths and queries are never stored
             "ts": float(e["ts"]),
@@ -29,7 +46,8 @@ def parse_line(line: bytes) -> dict | None:
             "host": req["host"].split(":")[0].lower(),
             "status": int(e.get("status", 0)),
             "size": int(e.get("size", 0)),
-            "probe": bool(PROBE_RE.match(req.get("uri", ""))),
+            "probe": bool(m),
+            "probe_kind": m.group(1).lower() if m else "",
         }
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
@@ -215,6 +233,8 @@ def unknown_domains(store: Store, routed: set[str], client_rows: list[dict] | No
     for host in set(requests) | set(attempts):
         if host in routed or host in ignored or not DOMAIN_RE.match(host):
             continue
+        if not requests.get(host) and not attempts.get(host):
+            continue  # numbers were reset: nothing to show
         sources = sorted(by_host.get(host, []), key=lambda s: -s["requests"])
         out.append({
             "host": host, "requests": requests.get(host, 0), "attempts": attempts.get(host, 0),
@@ -224,6 +244,54 @@ def unknown_domains(store: Store, routed: set[str], client_rows: list[dict] | No
             "source_count": len(sources),
         })
     return sorted(out, key=lambda u: (-(u["requests"] + u["attempts"]), u["host"]))
+
+
+def explain_ip(store: Store, ip: str, routed: set[str], now: float | None = None) -> dict:
+    """The conclusion about one address: what it did, why it is (not) considered hostile."""
+    addr = ipaddress.ip_address(ip)
+    now = now or time.time()
+    evidence = {e["kind"]: e["n"] for e in store.evidence_for(ip)}
+    hosts = store.client_hosts(ip, now - 31 * 86400)
+    probe_kinds = {k: n for k, n in evidence.items() if k not in ("stub", "auth")}
+    probes = sum(probe_kinds.values()) or sum(h["probes"] for h in hosts)
+    stubs = evidence.get("stub", 0) or sum(h["stubs"] for h in hosts)
+    auth = evidence.get("auth", 0)
+    requests = sum(h["requests"] for h in hosts)
+    unrouted = [h for h in hosts if h["host"] not in routed]
+
+    reasons = []
+    if probes:
+        if probe_kinds:
+            what = "; ".join(f"{PROBE_LABELS.get(k, k)}: {n} time(s)" for k, n in sorted(probe_kinds.items(), key=lambda kv: -kv[1]))
+        else:
+            what = f"{probes} request(s); the exact kinds were not recorded before this version"
+        reasons.append("Asked for files that exist only on misconfigured sites and that a real visitor never "
+                       "requests: " + what + ". This is the signature of an automated scanner looking for leaked secrets.")
+    if stubs:
+        reasons.append(f"Sent {stubs} request(s) for site names that do not exist here"
+                       + (f" ({len(unrouted)} different name(s))" if unrouted else "")
+                       + ": it is guessing which sites this server hosts.")
+    if auth:
+        reasons.append(f"Typed a wrong admin panel password {auth} time(s).")
+    if len(hosts) >= 5:
+        reasons.append(f"Touched {len(hosts)} different host names, which is how a crawler behaves, not a person.")
+
+    if probes:
+        level = "scanner"
+    elif stubs >= 10 or auth >= 5:
+        level = "suspicious"
+    else:
+        level = "clean"
+    if not reasons:
+        reasons.append("Nothing hostile was recorded for this address.")
+    return {
+        "ip": ip, "lan": addr.is_private, "level": level, "reasons": reasons,
+        "requests": requests, "errors": sum(h["errors"] for h in hosts),
+        "domains": [{"host": h["host"], "requests": h["requests"], "errors": h["errors"],
+                     "probes": h["probes"], "stubs": h["stubs"], "routed": h["host"] in routed} for h in hosts[:10]],
+        "can_ban": not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast
+                        or addr.is_reserved or addr.is_unspecified),
+    }
 
 
 def start(store: Store) -> threading.Event:
