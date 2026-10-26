@@ -697,6 +697,12 @@ $('#reset-go').onclick = async () => {
   } catch (e) { banner(e.message); }
 };
 
+/* ---------- colour theme ---------- */
+const THEME_LABEL = {auto: '🌓 Auto', light: '☀️ Light', dark: '🌙 Dark'};
+const themeBtn = $('#theme');
+themeBtn.textContent = THEME_LABEL[doormanTheme.get()];
+themeBtn.onclick = () => { themeBtn.textContent = THEME_LABEL[doormanTheme.next()]; };
+
 /* Only the dashboard is fetched on page load; other tabs load when opened. */
 loadStats();
 setInterval(loadStats, 10000);

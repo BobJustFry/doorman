@@ -295,3 +295,11 @@ def test_unban_request_reaches_the_host_helper_for_every_doorman_jail(client_wit
     # asking to block it again cancels the pending unban
     client.post("/api/bans", json={"ip": "93.123.109.214"})
     assert json.loads((main.DATA_DIR / "manual-bans.json").read_text())["unban"] == []
+
+
+def test_theme_script_is_external_and_both_pages_load_it(client):
+    for page in ("/login",):
+        assert "/static/theme.js" in client.get(page).text
+    assert client.get("/static/theme.js").status_code == 200
+    css = client.get("/static/style.css").text
+    assert 'data-theme="dark"' in css and 'data-theme="light"' in css and "prefers-color-scheme: dark" in css

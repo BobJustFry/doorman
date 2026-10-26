@@ -132,3 +132,14 @@ button.link:hover { text-decoration: underline; }
 .badge.dark { background: #20232b; color: #fff; border-color: #20232b; }
 button.link-chip { cursor: pointer; font: inherit; font-size: 12px; color: var(--fg); }
 button.link-chip:hover { text-decoration: underline; }
+
+/* manual theme choice (the buttons in the header); without data-theme the system decides */
+:root { color-scheme: light dark; }
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f5f6f8; --fg: #1c2230; --card: #fff; --muted: #6b7385; --line: #e2e5ec;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #12151c; --fg: #e6e9f0; --card: #1b2030; --muted: #8b93a7; --line: #2a3045;
+}
