@@ -186,3 +186,14 @@ def test_verdicts_for_unrouted_domains(client_with_store):
     clients = {(c["ip"], c["host"]): c for c in client.get("/api/stats").json()["clients"]}
     assert clients[("8.8.4.4", "scanned.example.com")]["probes"] == 1
     assert clients[("8.8.4.5", "noisy.example.com")]["stubs"] == 1
+
+
+def test_the_server_itself_is_never_a_client(tmp_path):
+    store = Store(tmp_path / "t.db")
+    log = tmp_path / "access.log"
+    log.write_bytes(line(host="nothing.example.com", status=404, ip="127.0.0.1", uri="/.env")
+                    + line(host="nothing.example.com", status=404, ip="8.8.4.4", uri="/.env"))
+    stats.step(store, log)
+    data = stats.build_dashboard(store, "24h", system_hosts=frozenset({"panel.example.com"}))
+    assert {c["ip"] for c in data["clients"]} == {"8.8.4.4"}
+    assert stats.is_loopback("127.0.0.1") and stats.is_loopback("::1") and not stats.is_loopback("192.168.1.1")

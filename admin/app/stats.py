@@ -35,6 +35,13 @@ def parse_line(line: bytes) -> dict | None:
         return None
 
 
+def is_loopback(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_loopback
+    except ValueError:
+        return False
+
+
 def mark_stub(hits: list[dict], known_hosts: set[str]) -> None:
     """A hit is a "stub hit" when the answer was a 404 for a host without a route."""
     for h in hits:
@@ -64,7 +71,7 @@ def step(store: Store, path: Path) -> int:
     if st.st_size == pos:
         store.set_meta("log_inode", inode)
         return 0
-    hits, consumed, lines = [], 0, 0
+    hits, consumed, lines = [], 0, 0  # hits from the server itself (loopback) are not clients
     with open(path, "rb") as f:
         f.seek(pos)
         for raw in f:
@@ -73,7 +80,7 @@ def step(store: Store, path: Path) -> int:
             consumed += len(raw)
             lines += 1
             hit = parse_line(raw)
-            if hit:
+            if hit and not is_loopback(hit["ip"]):
                 hits.append(hit)
     known = {r["domain"] for r in store.list()} | ({os.environ.get("ADMIN_DOMAIN", "").strip().lower()} - {""})
     mark_stub(hits, known)
@@ -151,7 +158,7 @@ def build_dashboard(store: Store, range_name: str, now: float | None = None,
     total["active_domains"] = sum(1 for h in ordered if h["active"])
     total["domains"] = len(routed)
     total["last5"] = last5
-    client_rows = clients(store, table, now - bucket * count, set(routed))
+    client_rows = clients(store, table, now - bucket * count, set(routed) | set(system_hosts))
     return {"now": now, "range": range_name, "bucket": bucket, "totals": total,
             "timeline": timeline, "hosts": ordered,
             "unknown": unknown_domains(store, set(routed) | set(system_hosts), client_rows),
@@ -164,9 +171,12 @@ def clients(store: Store, table: str, since: float, routed: set[str]) -> list[di
     out = []
     for r in rows:
         try:
-            lan = ipaddress.ip_address(r["ip"]).is_private
+            addr = ipaddress.ip_address(r["ip"])
         except ValueError:
             continue
+        if addr.is_loopback:
+            continue  # rows stored before loopback was excluded
+        lan = addr.is_private
         out.append({"ip": r["ip"], "host": r["host"], "requests": r["requests"],
                     "errors": r["errors"], "probes": r["probes"], "stubs": r["stubs"],
                     "lan": lan, "routed": r["host"] in routed})
