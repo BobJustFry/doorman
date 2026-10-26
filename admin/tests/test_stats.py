@@ -216,3 +216,12 @@ def test_browser_cancelled_requests_are_not_errors(client_with_store):
     assert host["requests"] == 4 and host["errors"] == 1
     row = d["clients"][0]
     assert row["requests"] == 4 and row["errors"] == 1
+
+
+def test_early_data_retries_425_are_not_errors(client_with_store):
+    client, store = client_with_store
+    client.post("/api/routes", json={"domain": "a.example.com", "upstream": "1.2.3.4"})
+    store.add_hits([stats.parse_line(line(host="a.example.com", status=s, ip="192.168.1.5")) for s in (200, 425, 425, 499, 404)])
+    t = client.get("/api/stats?range=24h").json()
+    assert t["totals"]["requests"] == 5 and t["totals"]["s4"] == 1 and t["totals"]["s2"] == 1
+    assert t["clients"][0]["errors"] == 1

@@ -151,8 +151,10 @@ class Store:
                 if host not in known and host not in seen_hosts and len(seen_hosts) >= MAX_HOSTS:
                     host = OTHER_HOST  # too many different unknown names: stop tracking new ones
                 seen_hosts.add(host)
-                # 499 = the browser cancelled the request itself: counted as a request, never as an error
-                cancelled = h["status"] == 499
+                # 499 = the browser cancelled the request itself, 425 = Caddy asked it to repeat a
+                # 0-RTT (HTTP/3 early data) request, which browsers do automatically: both are
+                # counted as requests, never as errors
+                cancelled = h["status"] in (499, 425)
                 col = None if cancelled else f"s{min(max(h['status'] // 100, 2), 5)}"
                 add_c, add_v, add_u = (f", {col}", ",1", f", {col}={col}+1") if col else ("", "", "")
                 for table, key, step in (("hits_hourly", "hour", 3600), ("hits_minute", "minute", 60)):
