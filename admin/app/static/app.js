@@ -365,9 +365,33 @@ function unknownRow(u) {
     }),
   );
   const tr = el('tr');
-  tr.append(el('td', u.host), el('td', u.requests ? u.requests.toLocaleString() : '–'),
+  const verdictTd = el('td');
+  verdictTd.append(verdictBadge(u.verdict));
+  const whoTd = el('td');
+  for (const s of u.sources || []) {
+    const chip = el('span', s.ip + ' · ' + s.requests.toLocaleString(), 'chip ' + (s.lan ? 'lan' : 'wan'));
+    chip.title = (s.lan ? 'Local network' : 'Internet') + (s.probes ? ', asked for scanner-only paths' : '');
+    whoTd.append(chip);
+  }
+  if (u.source_count > (u.sources || []).length) whoTd.append(el('span', '+' + (u.source_count - u.sources.length), 'chip'));
+  if (!(u.sources || []).length) whoTd.append(el('span', 'no address seen', 'muted'));
+  tr.append(el('td', u.host), verdictTd, whoTd, el('td', u.requests ? u.requests.toLocaleString() : '–'),
     el('td', u.attempts ? u.attempts.toLocaleString() : '–'), act);
   return tr;
+}
+
+const VERDICTS = {
+  scanner: ['Scanner', 'bad', 'Asked for paths only scanners request (/.env, /.git, ...)'],
+  suspicious: ['Suspicious', 'warn', 'Several internet addresses or many requests for a name that does not exist'],
+  internal: ['Internal', 'ok', 'Only your local network asks for it: probably a forgotten route'],
+  unknown: ['Unknown', '', 'Not enough information'],
+};
+
+function verdictBadge(v) {
+  const [label, cls, hint] = VERDICTS[v] || VERDICTS.unknown;
+  const b = el('span', label, 'badge ' + cls);
+  b.title = hint;
+  return b;
 }
 
 /* Clients: "who knocked", per IP, for routed and unrouted domains alike. */
@@ -383,9 +407,11 @@ function drawClients() {
   const byIp = new Map();
   for (const c of lastClients) {
     if (clientsFilter && c.host !== clientsFilter) continue;
-    const e = byIp.get(c.ip) || {ip: c.ip, lan: c.lan, requests: 0, errors: 0, domains: []};
+    const e = byIp.get(c.ip) || {ip: c.ip, lan: c.lan, requests: 0, errors: 0, probes: 0, stubs: 0, domains: []};
     e.requests += c.requests;
     e.errors += c.errors;
+    e.probes += c.probes || 0;
+    e.stubs += c.stubs || 0;
     e.domains.push(c);
     byIp.set(c.ip, e);
   }
@@ -405,7 +431,17 @@ function drawClients() {
     if (c.domains.length > 4) domTd.append(el('span', '+' + (c.domains.length - 4), 'chip'));
     const errTd = el('td', c.errors ? c.errors.toLocaleString() : '–');
     if (c.errors) errTd.style.color = 'var(--bad)';
-    tr.append(el('td', c.ip), netTd, domTd, el('td', c.requests.toLocaleString()), errTd);
+    const flagTd = el('td');
+    if (c.probes) {
+      const b = el('span', 'Scanner', 'badge bad');
+      b.title = c.probes + ' request(s) for scanner-only paths';
+      flagTd.append(b);
+    } else if (c.stubs >= 10 && !c.lan) {
+      const b = el('span', 'Suspicious', 'badge warn');
+      b.title = c.stubs + ' requests for names that do not exist';
+      flagTd.append(b);
+    }
+    tr.append(el('td', c.ip), netTd, domTd, el('td', c.requests.toLocaleString()), errTd, flagTd);
     return tr;
   }));
 }

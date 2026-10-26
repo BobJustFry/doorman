@@ -42,10 +42,12 @@ class Store:
                 CREATE TABLE IF NOT EXISTS clients_hourly (
                     host TEXT NOT NULL, ip TEXT NOT NULL, hour INTEGER NOT NULL,
                     n INTEGER NOT NULL DEFAULT 0, err INTEGER NOT NULL DEFAULT 0,
+                    probe INTEGER NOT NULL DEFAULT 0, stub INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (host, ip, hour));
                 CREATE TABLE IF NOT EXISTS clients_minute (
                     host TEXT NOT NULL, ip TEXT NOT NULL, minute INTEGER NOT NULL,
                     n INTEGER NOT NULL DEFAULT 0, err INTEGER NOT NULL DEFAULT 0,
+                    probe INTEGER NOT NULL DEFAULT 0, stub INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (host, ip, minute));
                 CREATE TABLE IF NOT EXISTS seen (
                     host TEXT PRIMARY KEY, ts REAL NOT NULL, total INTEGER NOT NULL DEFAULT 0);
@@ -56,6 +58,11 @@ class Store:
                 DROP TABLE IF EXISTS recent;"""
             )
             cols = [r[1] for r in self.conn.execute("PRAGMA table_info(routes)")]
+            for table in ("clients_hourly", "clients_minute"):  # databases from before suspicious counters
+                ccols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")]
+                for col in ("probe", "stub"):
+                    if col not in ccols:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} INTEGER NOT NULL DEFAULT 0")
             if "ports" not in cols:  # extra ports per route, stored as JSON
                 self.conn.execute("ALTER TABLE routes ADD COLUMN ports TEXT NOT NULL DEFAULT '[]'")
             self.conn.commit()
@@ -116,12 +123,13 @@ class Store:
                         (h["host"], int(h["ts"] // step * step), h["size"], h["size"]),
                     )
                 err = 1 if h["status"] >= 400 else 0
+                probe, stub = int(bool(h.get("probe"))), int(bool(h.get("stub")))
                 if h.get("ip"):
                     for table, key, step in (("clients_hourly", "hour", 3600), ("clients_minute", "minute", 60)):
                         self.conn.execute(
-                            f"INSERT INTO {table} (host, ip, {key}, n, err) VALUES (?,?,?,1,?)"
-                            f" ON CONFLICT(host, ip, {key}) DO UPDATE SET n=n+1, err=err+?",
-                            (h["host"], h["ip"], int(h["ts"] // step * step), err, err),
+                            f"INSERT INTO {table} (host, ip, {key}, n, err, probe, stub) VALUES (?,?,?,1,?,?,?)"
+                            f" ON CONFLICT(host, ip, {key}) DO UPDATE SET n=n+1, err=err+?, probe=probe+?, stub=stub+?",
+                            (h["host"], h["ip"], int(h["ts"] // step * step), err, probe, stub, err, probe, stub),
                         )
                 self.conn.execute(
                     "INSERT INTO seen (host, ts, total) VALUES (?,?,1)"
@@ -151,7 +159,8 @@ class Store:
         step = 3600 if key == "hour" else 60
         with _lock:
             rows = self.conn.execute(
-                f"SELECT ip, host, SUM(n) AS requests, SUM(err) AS errors FROM {table}"
+                f"SELECT ip, host, SUM(n) AS requests, SUM(err) AS errors,"
+                f" SUM(probe) AS probes, SUM(stub) AS stubs FROM {table}"
                 f" WHERE {key} >= ? GROUP BY ip, host ORDER BY requests DESC LIMIT ?",
                 (int(since // step * step), limit),
             ).fetchall()

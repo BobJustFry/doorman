@@ -80,7 +80,7 @@
       <p class="muted hint">Who is knocking, by IP address: routed and unrouted domains alike.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>IP address</th><th>Network</th><th>Domains</th><th>Requests</th><th>Errors</th></tr></thead>
+          <thead><tr><th>IP address</th><th>Network</th><th>Domains</th><th>Requests</th><th>Errors</th><th>Flags</th></tr></thead>
           <tbody id="clients-rows"></tbody>
         </table>
       </div>
@@ -89,10 +89,10 @@
 
     <div class="card panel">
       <h3>Unrouted domains</h3>
-      <p class="muted hint">Names that reached Doorman but have no route yet. Create a route to start serving them.</p>
+      <p class="muted hint">Names that reached Doorman but have no route yet. <b>Scanner</b>: someone asked for scanner-only paths. <b>Suspicious</b>: several internet addresses or many requests. <b>Internal</b>: only your LAN asks, probably a forgotten route.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Domain</th><th>HTTP requests</th><th>HTTPS attempts</th><th></th></tr></thead>
+          <thead><tr><th>Domain</th><th>Verdict</th><th>Who is asking</th><th>HTTP</th><th>HTTPS tries</th><th></th></tr></thead>
           <tbody id="unknown-rows"></tbody>
         </table>
       </div>

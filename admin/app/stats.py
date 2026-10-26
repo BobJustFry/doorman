@@ -35,10 +35,17 @@ def parse_line(line: bytes) -> dict | None:
         return None
 
 
+def mark_stub(hits: list[dict], known_hosts: set[str]) -> None:
+    """A hit is a "stub hit" when the answer was a 404 for a host without a route."""
+    for h in hits:
+        h["stub"] = h["status"] == 404 and h["host"] not in known_hosts
+
+
 def flag_suspicious(hits: list[dict], known_hosts: set[str]) -> None:
     """Feeds fail2ban: requests for hosts without a route, and scanner-only paths."""
+    mark_stub(hits, known_hosts)
     for h in hits:
-        if h["status"] == 404 and h["host"] not in known_hosts:
+        if h["stub"]:
             security.emit("stub", h["ip"], h["ts"])
         if h["probe"]:
             security.emit("probe", h["ip"], h["ts"])
@@ -68,8 +75,9 @@ def step(store: Store, path: Path) -> int:
             hit = parse_line(raw)
             if hit:
                 hits.append(hit)
-    store.add_hits(hits)
     known = {r["domain"] for r in store.list()} | ({os.environ.get("ADMIN_DOMAIN", "").strip().lower()} - {""})
+    mark_stub(hits, known)
+    store.add_hits(hits)
     flag_suspicious(hits, known)
     store.set_meta("log_inode", inode)
     store.set_meta("log_pos", str(pos + consumed))
@@ -143,10 +151,11 @@ def build_dashboard(store: Store, range_name: str, now: float | None = None,
     total["active_domains"] = sum(1 for h in ordered if h["active"])
     total["domains"] = len(routed)
     total["last5"] = last5
+    client_rows = clients(store, table, now - bucket * count, set(routed))
     return {"now": now, "range": range_name, "bucket": bucket, "totals": total,
             "timeline": timeline, "hosts": ordered,
-            "unknown": unknown_domains(store, set(routed) | set(system_hosts)),
-            "clients": clients(store, table, now - bucket * count, set(routed))}
+            "unknown": unknown_domains(store, set(routed) | set(system_hosts), client_rows),
+            "clients": client_rows}
 
 
 def clients(store: Store, table: str, since: float, routed: set[str]) -> list[dict]:
@@ -159,12 +168,36 @@ def clients(store: Store, table: str, since: float, routed: set[str]) -> list[di
         except ValueError:
             continue
         out.append({"ip": r["ip"], "host": r["host"], "requests": r["requests"],
-                    "errors": r["errors"], "lan": lan, "routed": r["host"] in routed})
+                    "errors": r["errors"], "probes": r["probes"], "stubs": r["stubs"],
+                    "lan": lan, "routed": r["host"] in routed})
     return out
 
 
-def unknown_domains(store: Store, routed: set[str]) -> list[dict]:
+def verdict(sources: list[dict]) -> str:
+    """Who is behind an unrouted name?
+
+    scanner    - someone asked for scanner-only paths (/.env, /.git, ...)
+    suspicious - many requests, or several different addresses, from the internet
+    internal   - only your own LAN asks for it (most likely a forgotten route)
+    unknown    - no client address known (e.g. only TLS handshakes were seen)
+    """
+    if not sources:
+        return "unknown"
+    if any(s["probes"] for s in sources):
+        return "scanner"
+    wan = [s for s in sources if not s["lan"]]
+    if len(wan) >= 3 or sum(s["stubs"] for s in wan) >= 10:
+        return "suspicious"
+    if not wan:
+        return "internal"
+    return "unknown"
+
+
+def unknown_domains(store: Store, routed: set[str], client_rows: list[dict] | None = None) -> list[dict]:
     """Domains that reached Doorman (HTTP requests or TLS handshakes) but have no route."""
+    by_host: dict[str, list[dict]] = {}
+    for c in client_rows or []:
+        by_host.setdefault(c["host"], []).append(c)
     requests = {h: s["total"] for h, s in store.seen_all().items()}
     attempts = store.unknown_attempts()
     ignored = store.ignored_all()
@@ -172,7 +205,14 @@ def unknown_domains(store: Store, routed: set[str]) -> list[dict]:
     for host in set(requests) | set(attempts):
         if host in routed or host in ignored or not DOMAIN_RE.match(host):
             continue
-        out.append({"host": host, "requests": requests.get(host, 0), "attempts": attempts.get(host, 0)})
+        sources = sorted(by_host.get(host, []), key=lambda s: -s["requests"])
+        out.append({
+            "host": host, "requests": requests.get(host, 0), "attempts": attempts.get(host, 0),
+            "verdict": verdict(sources),
+            "sources": [{"ip": s["ip"], "requests": s["requests"], "lan": s["lan"], "probes": s["probes"]}
+                        for s in sources[:3]],
+            "source_count": len(sources),
+        })
     return sorted(out, key=lambda u: (-(u["requests"] + u["attempts"]), u["host"]))
 
 

@@ -162,3 +162,27 @@ def test_security_log_for_fail2ban(client_with_store):
     assert any(ln.startswith("doorman-auth ip=") for ln in lines)
     assert "8.8.4.5" not in log and "8.8.4.7" not in log
     assert all(ln.split(" ", 1)[0].isdigit() for ln in log.splitlines())  # epoch timestamps
+
+
+def test_verdicts_for_unrouted_domains(client_with_store):
+    client, store = client_with_store
+    client.post("/api/routes", json={"domain": "known.example.com", "upstream": "1.2.3.4"})
+    hits = [
+        stats.parse_line(line(host="forgotten.example.com", status=404, ip="192.168.1.20")),
+        stats.parse_line(line(host="scanned.example.com", status=404, ip="8.8.4.4", uri="/.env")),
+        stats.parse_line(line(host="noisy.example.com", status=404, ip="8.8.4.5")),
+        stats.parse_line(line(host="noisy.example.com", status=404, ip="8.8.4.6")),
+        stats.parse_line(line(host="noisy.example.com", status=404, ip="8.8.4.7")),
+    ]
+    stats.mark_stub(hits, {"known.example.com"})
+    store.add_hits(hits)
+    unknown = {u["host"]: u for u in client.get("/api/stats").json()["unknown"]}
+    assert unknown["forgotten.example.com"]["verdict"] == "internal"
+    assert unknown["scanned.example.com"]["verdict"] == "scanner"
+    assert unknown["noisy.example.com"]["verdict"] == "suspicious"
+    assert unknown["noisy.example.com"]["source_count"] == 3
+    src = unknown["scanned.example.com"]["sources"][0]
+    assert src["ip"] == "8.8.4.4" and src["lan"] is False and src["probes"] == 1
+    clients = {(c["ip"], c["host"]): c for c in client.get("/api/stats").json()["clients"]}
+    assert clients[("8.8.4.4", "scanned.example.com")]["probes"] == 1
+    assert clients[("8.8.4.5", "noisy.example.com")]["stubs"] == 1
