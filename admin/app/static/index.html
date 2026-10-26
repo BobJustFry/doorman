@@ -11,6 +11,7 @@
   <h1>🚪 Doorman</h1>
   <nav id="tabs">
     <button data-tab="routes" class="active">Routes</button>
+    <button data-tab="stats">Stats</button>
     <button data-tab="system">System</button>
   </nav>
   <button class="ghost" id="logout">Sign out</button>
@@ -30,6 +31,24 @@
         <tbody id="rows"></tbody>
       </table>
       <p id="empty" class="muted pad" hidden>No routes yet.</p>
+    </div>
+  </section>
+
+  <section id="tab-stats" hidden>
+    <div class="bar">
+      <div class="seg" id="range">
+        <button data-range="24h" class="active">24 hours</button>
+        <button data-range="7d">7 days</button>
+        <button data-range="30d">30 days</button>
+      </div>
+      <span class="muted grow" id="stats-hint">Click a row to see the latest requests.</span>
+    </div>
+    <div class="card table-wrap">
+      <table>
+        <thead><tr><th></th><th>Domain</th><th>Requests</th><th>Errors</th><th>Last request</th><th>Trend</th></tr></thead>
+        <tbody id="stats-rows"></tbody>
+      </table>
+      <p id="stats-empty" class="muted pad" hidden>No data yet.</p>
     </div>
   </section>
 
@@ -69,6 +88,18 @@
       <button type="submit" id="submit">Save</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="recent-dlg">
+  <h2 id="recent-title">Latest requests</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Time</th><th>From</th><th>Request</th><th>Status</th></tr></thead>
+      <tbody id="recent-rows"></tbody>
+    </table>
+    <p id="recent-empty" class="muted pad" hidden>No requests recorded.</p>
+  </div>
+  <div class="actions"><button class="ghost" id="recent-close">Close</button></div>
 </dialog>
 
 <dialog id="config-dlg">

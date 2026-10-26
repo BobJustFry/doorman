@@ -41,17 +41,6 @@ def test_admin_domain_route_first():
     assert first["handle"][0]["upstreams"] == [{"dial": "admin:8000"}]
 
 
-@pytest.fixture
-def client(tmp_path, monkeypatch):
-    monkeypatch.setenv("DATA_DIR", str(tmp_path))
-    monkeypatch.setenv("ADMIN_PASSWORD", "secret")
-    from app import main
-    importlib.reload(main)
-    monkeypatch.setattr(main, "apply_config", lambda: None)
-    with TestClient(main.app) as c:
-        yield c
-
-
 def login(c):
     assert c.post("/login", json={"password": "secret"}).status_code == 200
 
@@ -111,3 +100,16 @@ def test_default_ports(client):
                                            "upstream_tls": True}).json()
     assert plain["route"]["upstream"] == "10.0.0.1:80"
     assert tls["route"]["upstream"] == "10.0.0.2:443"
+
+
+def test_admin_route_is_lan_only():
+    cfg = caddy.build_config([route()], admin_domain="panel.example.com")
+    routes = cfg["apps"]["http"]["servers"]["doorman"]["routes"]
+    assert "remote_ip" in routes[0]["match"][0]
+    assert "remote_ip" not in routes[1]["match"][0]
+
+
+def test_access_log_configured():
+    cfg = caddy.build_config([])
+    assert cfg["apps"]["http"]["servers"]["doorman"]["logs"]["default_logger_name"] == "doorman"
+    assert cfg["logging"]["logs"]["access"]["include"] == ["http.log.access.doorman"]

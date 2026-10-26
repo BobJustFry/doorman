@@ -32,6 +32,13 @@ section { display: grid; gap: 12px; }
 .bar { display: flex; gap: 10px; }
 .bar input { flex: 1; }
 .bar.end { justify-content: flex-end; }
+.bar { align-items: center; }
+.grow { flex: 1; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg button { background: transparent; color: var(--muted); border: 0; border-radius: 0; }
+.seg button.active { background: var(--card); color: var(--fg); }
+#recent-dlg { width: min(640px, calc(100vw - 32px)); }
+#recent-dlg .table-wrap { max-height: 50vh; overflow: auto; margin-bottom: 12px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); }
 tr:last-child td { border-bottom: 0; }

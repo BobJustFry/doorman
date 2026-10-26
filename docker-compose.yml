@@ -11,6 +11,7 @@ services:
       - ./caddy/caddy.json:/etc/caddy/caddy.json:ro
       - caddy_data:/data
       - caddy_config:/config
+      - caddy_logs:/var/log/caddy
     command: ["caddy", "run", "--config", "/etc/caddy/caddy.json", "--resume"]
     networks: [doorman]
     extra_hosts:
@@ -29,6 +30,7 @@ services:
       DATA_DIR: /data
     volumes:
       - admin_data:/data
+      - caddy_logs:/logs:ro
     # Admin UI is reachable only from the host itself (use an SSH tunnel)
     # unless ADMIN_DOMAIN is set, in which case Caddy serves it over HTTPS.
     ports:
@@ -42,4 +44,5 @@ networks:
 volumes:
   caddy_data:
   caddy_config:
+  caddy_logs:
   admin_data:

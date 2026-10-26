@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator, model_validator
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import caddy
+from . import caddy, stats
 from .db import Store
 
 DATA_DIR = Path(os.environ.get("DATA_DIR", "./data"))
@@ -59,7 +59,9 @@ async def lifespan(_: FastAPI):
         if apply_config() is None:
             break
         time.sleep(1)
+    stop_stats = stats.start(store)
     yield
+    stop_stats.set()
 
 
 app = FastAPI(title="Doorman", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
@@ -210,6 +212,56 @@ def _reachable(upstream: str) -> bool:
 @app.get("/api/status", dependencies=[Depends(require_auth)])
 def status():
     return {r["id"]: _reachable(r["upstream"]) for r in store.list() if r["enabled"]}
+
+
+RANGES = {"24h": (3600, 24), "7d": (86400, 7), "30d": (86400, 30)}
+
+
+@app.get("/api/stats", dependencies=[Depends(require_auth)])
+def get_stats(range: str = "24h"):
+    if range not in RANGES:
+        raise HTTPException(422, "range must be one of 24h, 7d, 30d")
+    bucket, count = RANGES[range]
+    now = time.time()
+    since = now - bucket * count
+    hosts: dict[str, dict] = {}
+
+    def row(host: str) -> dict:
+        return hosts.setdefault(host, {
+            "host": host, "requests": 0, "ok": 0, "redirects": 0, "client_errors": 0,
+            "server_errors": 0, "bytes": 0, "series": [0] * count,
+        })
+
+    for r in store.hourly_since(since):
+        idx = count - 1 - int((now - (r["hour"] + 1800)) // bucket)
+        if idx < 0:
+            continue
+        h = row(r["host"])
+        h["requests"] += r["n"]
+        h["ok"] += r["s2"]
+        h["redirects"] += r["s3"]
+        h["client_errors"] += r["s4"]
+        h["server_errors"] += r["s5"]
+        h["bytes"] += r["bytes"]
+        h["series"][min(idx, count - 1)] += r["n"]
+
+    routed = {r["domain"]: r for r in store.list()}
+    for domain in routed:
+        row(domain)
+    seen = store.seen_all()
+    active = store.recent_count(now - 300)
+    for host, h in hosts.items():
+        h["routed"] = host in routed
+        h["enabled"] = bool(routed[host]["enabled"]) if host in routed else False
+        h["last_seen"] = seen.get(host, {}).get("ts")
+        h["active_5m"] = active.get(host, 0)
+    out = sorted(hosts.values(), key=lambda h: (-(h["last_seen"] or 0), h["host"]))
+    return {"now": now, "range": range, "hosts": out}
+
+
+@app.get("/api/stats/recent", dependencies=[Depends(require_auth)])
+def recent_requests(host: str):
+    return store.recent(host.strip().lower(), 50)
 
 
 @app.get("/api/config", dependencies=[Depends(require_auth)])
