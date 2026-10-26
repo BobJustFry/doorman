@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232c3860'/%3E%3Crect x='9' y='5' width='14' height='22' rx='2' fill='%237b8fd8'/%3E%3Ccircle cx='20' cy='16' r='1.3' fill='%23ffd66b'/%3E%3C/svg%3E">
-<title>Service not responding</title>
+<title>Сервис не отвечает</title>
 <style>
   :root { --bg: #eef1f7; --fg: #1f2433; --muted: #6a7188; --door: #3b4a7a; --door2: #2c3860; --light: #ffd66b; --floor: #d5dae8; }
   @media (prefers-color-scheme: dark) {
@@ -22,7 +22,7 @@
 </head>
 <body>
   <main>
-    <svg viewBox="0 0 200 240" role="img" aria-label="A closed door">
+    <svg viewBox="0 0 200 240" role="img" aria-label="Закрытая дверь">
       <rect x="0" y="212" width="200" height="6" rx="3" fill="var(--floor)"/>
       <rect x="52" y="24" width="96" height="188" rx="6" fill="var(--door2)"/>
       <rect x="60" y="32" width="80" height="172" rx="4" fill="var(--door)"/>
@@ -30,10 +30,10 @@
       <rect x="70" y="118" width="60" height="74" rx="3" fill="var(--door2)" opacity=".6"/>
       <circle cx="128" cy="116" r="4.5" fill="var(--light)"/>
     </svg>
-    <h1>The service is not answering</h1>
-    <p><code id="host"></code> is set up, but the service behind it did not respond. It may be restarting or switched off.</p>
-    <p>Please try again in a minute. If it keeps happening, tell the administrator.</p>
-    <button onclick="location.reload()">Try again</button>
+    <h1>Сервис не отвечает</h1>
+    <p>Адрес <code id="host"></code> настроен, но сервис за ним не ответил. Возможно, он перезапускается или выключен.</p>
+    <p>Попробуйте ещё раз через минуту. Если ошибка повторяется, сообщите администратору.</p>
+    <button onclick="location.reload()">Повторить</button>
   </main>
   <script>document.getElementById('host').textContent = location.hostname;</script>
 </body>

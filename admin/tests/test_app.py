@@ -158,7 +158,7 @@ def test_stub_is_the_last_route_and_has_fallback_certificate():
     assert "match" not in last  # catch-all: any host without a route
     body = last["handle"][0]
     assert body["handler"] == "static_response" and body["status_code"] == 404
-    assert "Nobody's home" in body["body"]
+    assert "Здесь никого нет" in body["body"]
     assert servers["doorman"]["tls_connection_policies"][0]["fallback_sni"] == caddy.FALLBACK_NAME
     tls = cfg["apps"]["tls"]
     assert caddy.FALLBACK_NAME in tls["certificates"]["automate"]
@@ -178,4 +178,4 @@ def test_dead_upstream_gets_a_friendly_error_page():
         assert "502" in errors["match"][0]["expression"] and "504" in errors["match"][0]["expression"]
         h = errors["handle"][0]
         assert h["status_code"] == "{http.error.status_code}"  # keep the real status for monitoring
-        assert "not answering" in h["body"]
+        assert "Сервис не отвечает" in h["body"]
