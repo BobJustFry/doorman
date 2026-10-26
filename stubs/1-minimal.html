@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Nothing here</title>
+<style>
+  :root { --bg: #fafafa; --fg: #1d1d1f; --muted: #8a8a8e; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111113; --fg: #f2f2f4; --muted: #6f6f76; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px;
+    background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center; }
+  .code { font-size: clamp(72px, 22vw, 160px); font-weight: 200; letter-spacing: -.04em; line-height: 1; }
+  h1 { margin: 12px 0 6px; font-size: clamp(18px, 4vw, 24px); font-weight: 500; }
+  p { margin: 0; color: var(--muted); }
+  code { font: 14px ui-monospace, Menlo, Consolas, monospace; word-break: break-all; }
+</style>
+</head>
+<body>
+  <main>
+    <div class="code">404</div>
+    <h1>Nothing here</h1>
+    <p><code id="host"></code> is not connected to any service.</p>
+  </main>
+  <script>document.getElementById('host').textContent = location.hostname;</script>
+</body>
+</html>
