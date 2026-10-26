@@ -11,7 +11,7 @@ from pathlib import Path
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator, model_validator
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import caddy
@@ -26,7 +26,7 @@ CADDY_URL = os.environ.get("CADDY_ADMIN_URL", "http://caddy:2019")
 STATIC = Path(__file__).parent / "static"
 
 DOMAIN_RE = re.compile(r"^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$")
-UPSTREAM_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}:\d{1,5}$")
+UPSTREAM_RE = re.compile(r"^[A-Za-z0-9.\-]{1,253}(:\d{1,5})?$")
 
 
 def _secret_key() -> str:
@@ -92,9 +92,16 @@ class RouteIn(BaseModel):
     @classmethod
     def _upstream(cls, v: str) -> str:
         v = v.strip()
-        if not UPSTREAM_RE.match(v) or not 0 < int(v.rsplit(":", 1)[1]) < 65536:
-            raise ValueError("Upstream must look like 192.168.1.10:8080")
+        if not UPSTREAM_RE.match(v) or (":" in v and not 0 < int(v.rsplit(":", 1)[1]) < 65536):
+            raise ValueError("Upstream must look like 192.168.1.10 or 192.168.1.10:8080")
         return v
+
+    @model_validator(mode="after")
+    def _default_port(self):
+        # No port given: 80 for plain HTTP upstreams, 443 for HTTPS ones.
+        if ":" not in self.upstream:
+            self.upstream += ":443" if self.upstream_tls else ":80"
+        return self
 
     @field_validator("tls_mode")
     @classmethod

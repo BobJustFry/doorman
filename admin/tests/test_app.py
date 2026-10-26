@@ -81,7 +81,6 @@ def test_crud(client):
 
 @pytest.mark.parametrize("bad", [
     {"domain": "not a domain", "upstream": "1.2.3.4:80"},
-    {"domain": "a.example.com", "upstream": "1.2.3.4"},
     {"domain": "a.example.com", "upstream": "1.2.3.4:99999"},
     {"domain": "a.example.com", "upstream": "1.2.3.4:80", "tls_mode": "bogus"},
 ])
@@ -103,3 +102,12 @@ def test_admin_domain_internal_tls():
     cfg = caddy.build_config([], admin_domain="panel.corp.ru", admin_tls="internal")
     policy = cfg["apps"]["tls"]["automation"]["policies"][0]
     assert policy["subjects"] == ["panel.corp.ru"]
+
+
+def test_default_ports(client):
+    login(client)
+    plain = client.post("/api/routes", json={"domain": "a.example.com", "upstream": "10.0.0.1"}).json()
+    tls = client.post("/api/routes", json={"domain": "b.example.com", "upstream": "10.0.0.2",
+                                           "upstream_tls": True}).json()
+    assert plain["route"]["upstream"] == "10.0.0.1:80"
+    assert tls["route"]["upstream"] == "10.0.0.2:443"
