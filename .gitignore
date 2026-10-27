@@ -5,3 +5,7 @@ __pycache__/
 .venv/
 data/
 *.crt
+
+# local secrets: never commit
+doorman-credentials.txt
+*.secret
