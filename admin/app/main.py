@@ -84,11 +84,15 @@ def current_config() -> dict:
 
 
 def write_firewall_ports() -> None:
-    """Publishes the extra ports in use; a root helper on the host mirrors them into ufw."""
-    ports = sorted({p["port"] for r in store.list() if r["enabled"] for p in r["ports"]})
+    """Publishes the extra ports in use and the upstreams the routes need; a root helper on the
+    host mirrors them into ufw (inbound ports, and with --egress the only LAN hosts reachable)."""
+    routes = [r for r in store.list() if r["enabled"]]
+    ports = sorted({p["port"] for r in routes for p in r["ports"]})
+    upstreams = {r["upstream"] for r in routes}
+    upstreams |= {f"{r['upstream'].rsplit(':', 1)[0]}:{p['port']}" for r in routes for p in r["ports"]}
     try:
         with open(DATA_DIR / "firewall-ports.json", "w", encoding="utf-8") as f:
-            json.dump({"tcp": ports}, f)
+            json.dump({"tcp": ports, "upstreams": sorted(upstreams)}, f)
     except OSError:
         pass
 

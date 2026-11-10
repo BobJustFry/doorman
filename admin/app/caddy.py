@@ -134,7 +134,8 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
                 "access": {
                     "writer": {
                         "output": "file", "filename": ACCESS_LOG, "mode": "0644",
-                        "roll_size_mb": 10, "roll_keep": 3,
+                        # About two weeks of history to investigate an incident (gzip, ~50 MB on disk).
+                        "roll_size_mb": 10, "roll_keep": 100, "roll_keep_days": 30,
                     },
                     "encoder": {"format": "json"},
                     "include": ["http.log.access.doorman"],

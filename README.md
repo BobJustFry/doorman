@@ -103,6 +103,8 @@ What the audit looked at and what is in place:
 - **Containers**: unprivileged, all Linux capabilities dropped (Caddy keeps only `NET_BIND_SERVICE`), `no-new-privileges`, read-only root file system, process and memory limits; Caddy's admin API listens on `127.0.0.1` only. Dependencies are scanned with `pip-audit` (clean at release).
 - **Host** (needs root, run once): `sudo bash deploy/harden-host.sh` disables SSH password logins (only if you already have an SSH key), root login, X11 forwarding, hardens kernel network settings, sets the firewall to deny incoming by default, installs pending updates and removes the login user from the root-equivalent `lxd` group.
 
+- **If the proxy is ever broken into** (assume-breach): `sudo bash deploy/install-firewall-sync.sh --egress` lets the server reach private networks only where a route needs it (each upstream `IP:port`, plus DNS/DHCP of the gateway); the rest of the LAN, the router's admin page and other machines are rejected. The list follows your routes automatically. Run the installer without `--egress` to remove it. Better still, put Doorman in its own VLAN/DMZ on the router. The access log keeps about two weeks for investigations.
+
 Re-run `sudo bash deploy/install-fail2ban.sh` after updates: it also installs the helper behind the dashboard's **Block with fail2ban** and **Unblock** buttons. The panel itself never gets firewall rights; it only writes a request file that the helper validates (public addresses only) before acting.
 
 **Reset statistics**: *Dashboard → Reset…* clears the counters, the lists (unrouted and dismissed names) or both. Routes, certificates and blocked addresses are never touched.
@@ -120,7 +122,7 @@ Inside your office, point the same domains at Doorman as well (internal DNS, rou
 
 ## Security notes
 
-- The Caddy admin API (`:2019`) is reachable only inside the Docker network and is never published.
+- The Caddy admin API (`127.0.0.1:2019`) listens on loopback only and is never published.
 - The panel is bound to `127.0.0.1` unless you set `ADMIN_DOMAIN`. Use a long `ADMIN_PASSWORD`; failed logins are rate limited.
 - Upstream HTTPS certificates are not verified (typical for internal services with self-signed certs).
 

@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 # Installs a small root service that opens/closes ufw ports for Doorman routes
 # whenever the admin panel changes them. Run once: sudo bash deploy/install-firewall-sync.sh
+#
+#   --egress  also limit what the server itself may reach on private networks to the
+#             upstreams of the routes (+ DNS/DHCP). If the proxy is ever broken into, it
+#             cannot be used to attack the rest of the LAN. Run again without it to undo.
 set -euo pipefail
+EGRESS=""
+for a in "$@"; do
+  case "$a" in
+    --egress) EGRESS="--egress" ;;
+    *) echo "Unknown option: $a"; exit 1 ;;
+  esac
+done
 
 [ "$(id -u)" -eq 0 ] || { echo "Run as root: sudo bash $0"; exit 1; }
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -17,7 +28,7 @@ Description=Sync ufw with Doorman route ports
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/doorman-firewall-sync $PORTS_FILE
+ExecStart=/usr/local/bin/doorman-firewall-sync $PORTS_FILE $EGRESS
 UNIT
 
 cat > /etc/systemd/system/doorman-firewall.path <<UNIT
@@ -51,3 +62,7 @@ systemctl start doorman-firewall.service
 echo "Done. Ports of Doorman routes are now opened in ufw automatically."
 echo "Watching: $PORTS_FILE"
 ufw status | grep doorman-route || echo "(no extra route ports yet)"
+if [ -n "$EGRESS" ]; then
+  echo "Outbound to private networks, allowed only to:"
+  ufw status | grep -E 'ALLOW OUT.*doorman-egress' || echo "(nothing yet)"
+fi

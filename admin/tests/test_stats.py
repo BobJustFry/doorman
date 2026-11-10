@@ -140,7 +140,8 @@ def test_firewall_ports_file_only_lists_enabled_routes(client_with_store):
                                      "ports": [{"port": 7000}]})
     from app import main
     data = json.loads((main.DATA_DIR / "firewall-ports.json").read_text())
-    assert data == {"tcp": [8444, 9000]}  # disabled routes do not open ports
+    # disabled routes neither open ports nor make their upstream reachable
+    assert data == {"tcp": [8444, 9000], "upstreams": ["1.2.3.4:80", "1.2.3.4:8444", "1.2.3.4:9000"]}
 
 
 def test_security_log_for_fail2ban(client_with_store):
