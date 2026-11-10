@@ -57,7 +57,21 @@ def _upstream_error_routes() -> dict:
 _FALLBACK_TLS = [{"default_sni": FALLBACK_NAME, "fallback_sni": FALLBACK_NAME}]
 
 
-def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) -> dict:
+# Browsers that saw this once never try plain HTTP for the name again, so nobody on a café
+# Wi-Fi can strip TLS from a later visit. Only for publicly trusted certificates: with the
+# internal CA it would forbid clicking through the certificate warning.
+_HSTS = {
+    "handler": "headers",
+    "response": {
+        "set": {"Strict-Transport-Security": ["max-age=31536000"]},
+        # keep the upstream's own policy (includeSubDomains, preload) when it sends one
+        "require": {"headers": {"Strict-Transport-Security": None}},
+        "deferred": True,
+    },
+}
+
+
+def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False, hsts: bool = False) -> dict:
     handler: dict = {
         "handler": "reverse_proxy",
         "upstreams": [{"dial": upstream}],
@@ -75,7 +89,7 @@ def _proxy_route(domain: str, upstream: str, tls: bool, lan_only: bool = False) 
     match: dict = {"host": [domain]}
     if lan_only:
         match["remote_ip"] = {"ranges": PRIVATE_RANGES}
-    return {"match": [match], "handle": [handler], "terminal": True}
+    return {"match": [match], "handle": ([_HSTS] if hsts else []) + [handler], "terminal": True}
 
 
 def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "",
@@ -88,7 +102,8 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
     if admin_domain:
         all_hosts.append(admin_domain)
         # The panel is never served to the internet, even if 80/443 are forwarded to this server.
-        http_routes.append(_proxy_route(admin_domain, f"127.0.0.1:{admin_port}", False, lan_only=True))
+        http_routes.append(_proxy_route(admin_domain, f"127.0.0.1:{admin_port}", False, lan_only=True,
+                                        hsts=admin_tls != "internal"))
         if admin_tls == "internal":
             internal_hosts.append(admin_domain)
 
@@ -96,14 +111,15 @@ def build_config(routes: list[dict], admin_domain: str = "", acme_email: str = "
         if not r["enabled"]:
             continue
         all_hosts.append(r["domain"])
-        http_routes.append(_proxy_route(r["domain"], r["upstream"], bool(r["upstream_tls"])))
+        public = r["tls_mode"] != "internal"
+        http_routes.append(_proxy_route(r["domain"], r["upstream"], bool(r["upstream_tls"]), hsts=public))
         if r["tls_mode"] == "internal":
             internal_hosts.append(r["domain"])
         # Extra ports are forwarded 1:1: public port N goes to port N of the upstream host.
         host = r["upstream"].rsplit(":", 1)[0]
         for p in r.get("ports", []):
             extra.setdefault(p["port"], []).append(
-                _proxy_route(r["domain"], f"{host}:{p['port']}", bool(p["tls"])))
+                _proxy_route(r["domain"], f"{host}:{p['port']}", bool(p["tls"]), hsts=public))
 
     servers: dict = {
         "doorman": {

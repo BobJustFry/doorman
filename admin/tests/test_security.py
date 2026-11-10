@@ -303,3 +303,25 @@ def test_theme_script_is_external_and_both_pages_load_it(client):
     assert client.get("/static/theme.js").status_code == 200
     css = client.get("/static/style.css").text
     assert 'data-theme="dark"' in css and 'data-theme="light"' in css and "prefers-color-scheme: dark" in css
+
+
+def test_hsts_only_for_publicly_trusted_routes():
+    from app import caddy
+    cfg = caddy.build_config([
+        {"domain": "pub.example.com", "upstream": "10.0.0.1:443", "upstream_tls": 1, "tls_mode": "auto",
+         "enabled": 1, "ports": [{"port": 8444, "tls": True}]},
+        {"domain": "lan.example.com", "upstream": "10.0.0.2:80", "upstream_tls": 0, "tls_mode": "internal",
+         "enabled": 1, "ports": []},
+    ])
+
+    def handlers(server, host):
+        route = next(r for r in cfg["apps"]["http"]["servers"][server]["routes"]
+                     if host in r.get("match", [{}])[0].get("host", []))
+        return [h["handler"] for h in route["handle"]], route["handle"][0]
+
+    names, first = handlers("doorman", "pub.example.com")
+    assert names == ["headers", "reverse_proxy"]
+    assert first["response"]["set"]["Strict-Transport-Security"] == ["max-age=31536000"]
+    assert first["response"]["require"]["headers"] == {"Strict-Transport-Security": None}  # keep upstream's own
+    assert handlers("port_8444", "pub.example.com")[0] == ["headers", "reverse_proxy"]
+    assert handlers("doorman", "lan.example.com")[0] == ["reverse_proxy"]  # internal CA: no HSTS

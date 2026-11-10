@@ -15,14 +15,14 @@ def proxy_routes(cfg, server="doorman"):
     """The reverse-proxy routes of a server (without the helper routes and the stub)."""
     routes = cfg["apps"]["http"]["servers"][server]["routes"]
     return [r for r in routes if any("host" in m for m in r.get("match", []))
-            and r["handle"][0]["handler"] == "reverse_proxy"]
+            and r["handle"][-1]["handler"] == "reverse_proxy"]
 
 
 def test_build_config_routes_by_host():
     cfg = caddy.build_config([route()])
     r = proxy_routes(cfg)[0]
     assert r["match"] == [{"host": ["a.example.com"]}]
-    assert r["handle"][0]["upstreams"] == [{"dial": "10.0.0.5:8080"}]
+    assert r["handle"][-1]["upstreams"] == [{"dial": "10.0.0.5:8080"}]
     policies = cfg["apps"]["tls"]["automation"]["policies"]
     assert policies[1]["subjects"] == ["a.example.com"]  # public name keeps its own ACME policy
     assert policies[-1]["on_demand"] is True and "subjects" not in policies[-1]
@@ -39,13 +39,13 @@ def test_internal_tls_policy_and_https_upstream():
     policy = cfg["apps"]["tls"]["automation"]["policies"][0]
     assert "a.example.com" in policy["subjects"]
     assert policy["issuers"] == [{"module": "internal"}]
-    handler = proxy_routes(cfg)[0]["handle"][0]
+    handler = proxy_routes(cfg)[0]["handle"][-1]
     assert handler["transport"]["tls"]["insecure_skip_verify"] is True
 
 
 def test_admin_domain_route_first():
     cfg = caddy.build_config([route()], admin_domain="panel.example.com")
-    assert proxy_routes(cfg)[0]["handle"][0]["upstreams"] == [{"dial": "127.0.0.1:8080"}]
+    assert proxy_routes(cfg)[0]["handle"][-1]["upstreams"] == [{"dial": "127.0.0.1:8080"}]
 
 
 def login(c):
@@ -127,10 +127,10 @@ def test_extra_ports_are_forwarded_one_to_one():
                                     ports=[{"port": 8444, "tls": True}, {"port": 9000, "tls": False}])])
     servers = cfg["apps"]["http"]["servers"]
     assert servers["port_8444"]["listen"] == [":8444"]
-    handler = proxy_routes(cfg, "port_8444")[0]["handle"][0]
+    handler = proxy_routes(cfg, "port_8444")[0]["handle"][-1]
     assert handler["upstreams"] == [{"dial": "10.0.0.20:8444"}]
     assert handler["transport"]["tls"]["insecure_skip_verify"] is True
-    plain = proxy_routes(cfg, "port_9000")[0]["handle"][0]
+    plain = proxy_routes(cfg, "port_9000")[0]["handle"][-1]
     assert plain["upstreams"] == [{"dial": "10.0.0.20:9000"}] and "transport" not in plain
     assert servers["doorman"]["listen"] == [":80", ":443"]
 
@@ -187,10 +187,10 @@ def test_dead_upstream_gets_a_friendly_error_page():
 
 def test_original_host_and_sni_are_sent_to_upstream():
     cfg = caddy.build_config([route(domain="webhook.example.com", upstream="10.0.0.20:443", upstream_tls=1)])
-    handler = proxy_routes(cfg)[0]["handle"][0]
+    handler = proxy_routes(cfg)[0]["handle"][-1]
     assert handler["headers"]["request"]["set"]["Host"] == ["{http.request.host}"]
     assert handler["transport"]["tls"]["server_name"] == "webhook.example.com"
-    plain = proxy_routes(caddy.build_config([route()]))[0]["handle"][0]
+    plain = proxy_routes(caddy.build_config([route()]))[0]["handle"][-1]
     assert plain["headers"]["request"]["set"]["Host"] == ["{http.request.host}"] and "transport" not in plain
 
 
@@ -207,7 +207,7 @@ def test_plain_http_is_redirected_and_servers_have_slowloris_limits():
 
 def test_server_and_powered_by_headers_are_removed():
     cfg = caddy.build_config([route()])
-    handler = proxy_routes(cfg)[0]["handle"][0]
+    handler = proxy_routes(cfg)[0]["handle"][-1]
     assert {"Server", "X-Powered-By"} <= set(handler["headers"]["response"]["delete"])
     first = cfg["apps"]["http"]["servers"]["doorman"]["routes"][0]["handle"][0]
     assert first["handler"] == "headers" and {"Server", "Via"} <= set(first["response"]["delete"])

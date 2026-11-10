@@ -178,19 +178,32 @@ def egress_rule_numbers() -> list[int]:
             if (m := EGRESS_RULE.match(line.strip()))]
 
 
+def load_state(state_path: str = STATE):
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return None
+
+
+def remove_egress(applied) -> None:
+    """Delete by rule text, not by number: fail2ban inserts rules at the top at any moment,
+    which shifts the numbers. Numbers are only the fallback for rules we have no record of."""
+    for rule in applied if isinstance(applied, list) else []:
+        if isinstance(rule, list) and rule[-2:] == ["comment", EGRESS_TAG]:
+            subprocess.run(["ufw", "--force", "delete", *rule[:-2]], capture_output=True, text=True)
+    for number in sorted(egress_rule_numbers(), reverse=True):
+        ufw("--force", "delete", str(number))
+
+
 def sync_egress(plan: list[list[str]], state_path: str = STATE) -> None:
     """Rebuilds the egress rules only when the plan changed (or someone removed them)."""
     present = egress_rule_numbers()
-    try:
-        with open(state_path, encoding="utf-8") as f:
-            applied = json.load(f)
-    except (OSError, ValueError):
-        applied = None
+    applied = load_state(state_path)
     # Every command yields exactly one numbered rule: each address belongs to one family.
     if applied == plan and len(present) == len(plan):
         return
-    for number in sorted(present, reverse=True):
-        ufw("--force", "delete", str(number))
+    remove_egress(applied)
     for rule in plan:
         ufw(*rule)
     os.makedirs(os.path.dirname(state_path), exist_ok=True)
@@ -213,8 +226,7 @@ def main(argv: list[str]) -> None:
             return
         sync_egress(egress_plan(ups, infrastructure(), ipv6_enabled()))
     elif egress_rule_numbers():
-        for number in sorted(egress_rule_numbers(), reverse=True):
-            ufw("--force", "delete", str(number))
+        remove_egress(load_state())
         try:
             os.unlink(STATE)
         except OSError:
