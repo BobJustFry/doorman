@@ -88,3 +88,49 @@ def test_installer_and_filters_are_consistent():
     assert "doorman-fail2ban-bans" in installer and "doorman-bans.path" in installer
     for f in ("auth", "stub", "probe"):
         assert (DEPLOY / "fail2ban" / "filter.d" / f"doorman-{f}.conf").exists()
+
+
+def test_helper_does_not_follow_a_symlink_planted_by_the_container(tmp_path):
+    """The data directory belongs to the container. A link ban-status.json -> /etc/shadow
+    must not let the root helper overwrite the target."""
+    import os
+    import pytest
+    mod = load("bans_helper3", "fail2ban-bans.py")
+    victim = tmp_path / "victim.txt"
+    victim.write_text("precious")
+    data = tmp_path / "data"
+    data.mkdir()
+    try:
+        os.symlink(victim, data / "ban-status.json")
+        os.symlink(victim, data / "manual-bans.json")
+    except (OSError, NotImplementedError):
+        pytest.skip("symlinks not available here")
+    mod.apply(str(data), FakeFail2ban())
+    assert victim.read_text() == "precious"
+    assert not (data / "ban-status.json").is_symlink()
+    assert "jails" in json.loads((data / "ban-status.json").read_text())
+    assert [p.name for p in data.iterdir() if p.name.startswith(".tmp-")] == []
+
+
+def test_egress_plan_allows_only_route_upstreams_before_rejecting_private_networks():
+    mod = load("fw_sync", "firewall-sync.py")
+    data = {"tcp": [8444, "x", 80], "upstreams": [
+        "192.168.12.20:443", "192.168.12.20:8444", "8.8.8.8:443", "127.0.0.1:8080", "nas.lan:5000", "bad"]}
+    names = {"nas.lan": {"192.168.12.30"}}
+    ups, unresolved = mod.wanted_upstreams(data, resolver=lambda h: names.get(h, mod.resolve(h)))
+    assert ups == {("192.168.12.20", 443), ("192.168.12.20", 8444), ("192.168.12.30", 5000)}
+    assert unresolved == 0
+    assert mod.wanted_ports(data) == {8444}  # privileged and junk values are dropped
+    plan = mod.egress_plan(ups, {("192.168.12.1", 53, "udp")}, v6=False)
+    kinds = [r[0] for r in plan]
+    assert kinds == sorted(kinds)  # every "allow" comes before any "reject"
+    assert ["allow", "out", "proto", "tcp", "to", "192.168.12.20", "port", "8444", "comment", "doorman-egress"] in plan
+    assert ["reject", "out", "to", "192.168.0.0/16", "comment", "doorman-egress"] in plan
+    assert not any("fc00::/7" in r for r in plan)  # IPv6 rules only when ufw handles IPv6
+    assert all(r[-1] == "doorman-egress" for r in plan)
+
+
+def test_egress_unresolved_name_is_reported():
+    mod = load("fw_sync2", "firewall-sync.py")
+    ups, unresolved = mod.wanted_upstreams({"upstreams": ["gone.lan:80"]}, resolver=lambda h: set())
+    assert ups == set() and unresolved == 1

@@ -17,6 +17,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 MANUAL_JAIL = "doorman-manual"
@@ -38,6 +39,37 @@ def public_ip(value) -> str | None:
     return str(addr) if addr.is_global and not addr.is_multicast else None
 
 
+def read_json(path: str):
+    """The directory belongs to the container: never follow a symlink planted there."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except OSError:
+        return {}
+    with os.fdopen(fd, encoding="utf-8") as f:
+        try:
+            return json.load(f)
+        except ValueError:
+            return {}
+
+
+def write_json(data_dir: str, name: str, data) -> None:
+    """Write via a fresh temp file and rename it over the target. Opening the target directly
+    would follow a symlink the container put in its place (e.g. to /etc/shadow) and let it
+    overwrite any file on the host as root; rename replaces the link itself instead."""
+    fd, tmp = tempfile.mkstemp(dir=data_dir, prefix=".tmp-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(data_dir, name))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 def banned_in(jail: str, f2b=run_f2b) -> list[str]:
     m = re.search(r"Banned IP list:\s*(.*)", f2b("status", jail))
     return [ip for ip in (m.group(1).split() if m else []) if public_ip(ip)]
@@ -45,11 +77,7 @@ def banned_in(jail: str, f2b=run_f2b) -> list[str]:
 
 def apply(data_dir: str, f2b=run_f2b, now: float | None = None) -> list[str]:
     now = now or time.time()
-    try:
-        with open(os.path.join(data_dir, "manual-bans.json"), encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError):
-        data = {}
+    data = read_json(os.path.join(data_dir, "manual-bans.json"))
     if not isinstance(data, dict):
         data = {}
     wanted = {public_ip(b.get("ip")) for b in data.get("bans", [])[:MAX_ADDRESSES] if isinstance(b, dict)} - {None}
@@ -71,10 +99,7 @@ def apply(data_dir: str, f2b=run_f2b, now: float | None = None) -> list[str]:
                 log.append(f"unblocked {ip} ({jail})")
 
     status = {"updated": now, "jails": {jail: banned_in(jail, f2b) for jail in JAILS}}
-    target = os.path.join(data_dir, "ban-status.json")
-    with open(target, "w", encoding="utf-8") as f:
-        json.dump(status, f)
-    os.chmod(target, 0o644)
+    write_json(data_dir, "ban-status.json", status)
     return log
 
 
