@@ -105,6 +105,9 @@ What the audit looked at and what is in place:
 
 - **If the proxy is ever broken into** (assume-breach): `sudo bash deploy/install-firewall-sync.sh --egress` lets the server reach private networks only where a route needs it (each upstream `IP:port`, plus DNS/DHCP of the gateway); the rest of the LAN, the router's admin page and other machines are rejected. The list follows your routes automatically. Run the installer without `--egress` to remove it. Better still, put Doorman in its own VLAN/DMZ on the router. The access log keeps about two weeks for investigations.
 
+- **Updates of the internet-facing part**: `bash deploy/install-auto-update.sh` (docker group, no root) checks for a new Caddy image every week (Sunday 23:00 server time) and restarts the proxy only when there is one. If the new version does not come back with the same routes, it rolls back to the previous image by itself. Log: `~/doorman-update.log`; run `bash deploy/update-caddy.sh` to update now.
+- **HSTS**: routes with Let's Encrypt certificates send `Strict-Transport-Security` (1 year) unless the service sends its own policy, so a first visit cannot be downgraded to plain HTTP. Internal-CA routes do not get it.
+
 Re-run `sudo bash deploy/install-fail2ban.sh` after updates: it also installs the helper behind the dashboard's **Block with fail2ban** and **Unblock** buttons. The panel itself never gets firewall rights; it only writes a request file that the helper validates (public addresses only) before acting.
 
 **Reset statistics**: *Dashboard → Reset…* clears the counters, the lists (unrouted and dismissed names) or both. Routes, certificates and blocked addresses are never touched.
